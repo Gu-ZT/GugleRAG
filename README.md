@@ -17,7 +17,18 @@ The backend currently keeps the MVP document store in `GUGLERAG_DATA` as JSON wh
 
 ## First Run
 
-If `.env` does not exist, open `http://127.0.0.1:8080/` after starting the backend. GugleRAG shows a setup page that writes `.env` with:
+The setup UI is implemented in Vue. The backend does not embed handwritten HTML.
+
+Development flow:
+
+```bash
+cargo run
+cd frontend
+npm install
+npm run dev
+```
+
+Open the Vite URL, usually `http://127.0.0.1:5173/`. If `.env` does not exist, the Vue app shows the setup page and writes `.env` through `/api/setup` with:
 
 - `SERVER_HOST` and `SERVER_PORT`
 - `DATABASE_URL` for SQLite, MySQL, or PostgreSQL
@@ -26,6 +37,18 @@ If `.env` does not exist, open `http://127.0.0.1:8080/` after starting the backe
 - MCP enablement and auth requirement
 
 Restart the backend after saving `.env`.
+
+Production/static flow:
+
+```bash
+cd frontend
+npm install
+npm run build
+cd ..
+cargo run
+```
+
+The backend serves `frontend/dist` as static files and falls back to `frontend/dist/index.html` for the Vue app.
 
 ## Backend
 

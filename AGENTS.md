@@ -3,7 +3,9 @@
 ## Current Project Notes
 
 - The repository is a Rust backend at the root plus a Vue 3/Vite frontend in `frontend/`.
-- If `.env` is missing, `/` must show the setup UI and `/api/setup` may write the first `.env`. Once `.env` exists, setup writes are rejected.
+- Setup UI must be implemented in Vue under `frontend/`; do not add embedded HTML strings to Rust handlers.
+- The backend serves `frontend/dist` static files in production and falls back to `frontend/dist/index.html` for SPA routes.
+- If `.env` is missing, the Vue app must show the setup UI and `/api/setup` may write the first `.env`. Once `.env` exists, setup writes are rejected.
 - `DATABASE_URL` must remain database-vendor neutral. Keep support for SQLite, MySQL, and PostgreSQL URL prefixes when adding SQLx persistence.
 - The current MVP still stores documents/users in `GUGLERAG_DATA` JSON. Replace this through a repository layer instead of coupling handlers directly to SQLx.
 - Do not commit `.env`, local data files, `target/`, `frontend/node_modules/`, or `frontend/dist/`.

@@ -3,7 +3,7 @@
 ## 0. 当前初始化状态
 
 - 已建立 Rust 后端 MVP：健康检查、注册/登录、文档 CRUD、简单搜索、MCP HTTP JSON-RPC 端点。
-- 已加入首次启动配置流程：当 `.env` 不存在时，首页展示配置界面并通过 `/api/setup` 写入 `.env`。
+- 已加入首次启动配置流程：当 `.env` 不存在时，Vue 前端展示配置界面并通过 `/api/setup` 写入 `.env`。
 - 配置层已识别 SQLite、MySQL、PostgreSQL 三类 `DATABASE_URL`，后续持久化层基于 SQLx 接入。
 - 已新增 `frontend/` Vue 3 + TypeScript + Vite 项目骨架，开发时通过 Vite proxy 调用后端。
 - 当前文档/用户数据仍使用 `GUGLERAG_DATA` JSON 文件作为 MVP fallback，数据库持久化是下一阶段重点。
@@ -16,7 +16,7 @@
 - Markdown 文档管理与全文搜索
 - 内置 MCP (Model Context Protocol) 服务，供 AI Agent 调用
 - 嵌入向量化支持（本地推理 / SiliconFlow API 切换）
-- 全栈自包含：单一 Rust 二进制文件，内嵌 Vue3 前端静态资源
+- 全栈自包含：Rust 后端托管 Vue3 前端构建产物，后续可切换为二进制资源嵌入
 - 可选重排模型集成，提升 RAG 检索质量
 
 **交付形式**：一个可执行文件，通过环境变量配置即可运行。
@@ -29,7 +29,7 @@
 |------------------|------------------------------------------------------------|
 | **后端语言**     | Rust（稳定版）                                             |
 | **Web 框架**     | Axum（或 Actix-web）                                       |
-| **数据库**       | SQLite（开发/测试），MySQL / PostgreSQL（通过 `sqlx`）      |
+| **数据库**       | SQLite（开发/测试），MySQL / PostgreSQL（通过 `sqlx`）     |
 | **全文搜索**     | Tantivy（Rust 原生全文检索引擎）                           |
 | **嵌入模型**     | `fastembed-rs`（本地 ONNX 推理） + SiliconFlow API（远程） |
 | **前端框架**     | Vue 3 + TypeScript                                         |
