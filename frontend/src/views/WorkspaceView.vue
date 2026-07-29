@@ -25,12 +25,12 @@ const editor = reactive({
   tags: ""
 });
 
-const authHeaders = computed<Record<string, string>>(() => {
+function authHeaders(): Record<string, string> {
   if (!token.value) {
     return {};
   }
   return { Authorization: `Bearer ${token.value}` };
-});
+}
 const hasActiveDoc = computed(() => Boolean(activeDoc.value?.id));
 
 function setMessage(kind: "error" | "notice", message: string) {
@@ -71,7 +71,7 @@ async function loadMe() {
     return;
   }
   try {
-    user.value = await request<PublicUser>("/api/me", { headers: authHeaders.value });
+    user.value = await request<PublicUser>("/api/me", { headers: authHeaders() });
     await loadDocuments();
   } catch {
     logout();
@@ -80,7 +80,7 @@ async function loadMe() {
 
 async function loadDocuments() {
   try {
-    docs.value = await request<DocumentItem[]>("/api/documents", { headers: authHeaders.value });
+    docs.value = await request<DocumentItem[]>("/api/documents", { headers: authHeaders() });
     if (!activeDoc.value && docs.value.length > 0) {
       await openDocument(docs.value[0].id);
     }
@@ -98,7 +98,7 @@ async function searchDocuments() {
     }
     const results = await request<SearchResult[]>(
       `/api/search?q=${encodeURIComponent(query.value)}&limit=30`,
-      { headers: authHeaders.value }
+      { headers: authHeaders() }
     );
     docs.value = results.map((item) => ({
       id: item.id,
@@ -114,7 +114,7 @@ async function searchDocuments() {
 
 async function openDocument(id: string) {
   try {
-    activeDoc.value = await request<DocumentItem>(`/api/documents/${id}`, { headers: authHeaders.value });
+    activeDoc.value = await request<DocumentItem>(`/api/documents/${id}`, { headers: authHeaders() });
     editor.title = activeDoc.value.title;
     editor.content = activeDoc.value.content ?? "";
     editor.tags = activeDoc.value.tags.join(", ");
@@ -128,7 +128,7 @@ async function createDocument() {
   try {
     const created = await request<DocumentItem>("/api/documents", {
       method: "POST",
-      headers: authHeaders.value,
+      headers: authHeaders(),
       body: JSON.stringify({
         title: "未命名文档",
         content: "# 未命名文档\n\n开始记录团队知识。",
@@ -150,7 +150,7 @@ async function saveDocument() {
   try {
     const saved = await request<DocumentItem>(`/api/documents/${activeDoc.value.id}`, {
       method: "PUT",
-      headers: authHeaders.value,
+      headers: authHeaders(),
       body: JSON.stringify({
         title: editor.title,
         content: editor.content,
@@ -173,7 +173,7 @@ async function deleteDocument() {
   try {
     await request(`/api/documents/${activeDoc.value.id}`, {
       method: "DELETE",
-      headers: authHeaders.value
+      headers: authHeaders()
     });
     activeDoc.value = null;
     editor.title = "";
