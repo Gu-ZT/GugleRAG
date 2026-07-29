@@ -3,7 +3,8 @@
 ## 0. 当前初始化状态
 
 - 已建立 Rust 后端 MVP：健康检查、注册/登录、文档 CRUD、简单搜索、MCP HTTP JSON-RPC 端点。
-- 已加入首次启动配置流程：当 `.env` 不存在时，Vue 前端展示配置界面并通过 `/api/setup` 写入 `.env`。
+- 已加入首次启动配置流程：当 `.env` 不存在时，Vue 前端展示分步配置向导并通过 `/api/setup` 写入 `.env`。
+- 已加入可选重排模型配置：`RERANKER_ENABLED`、`RERANKER_PROVIDER`、`RERANKER_MODEL`、`RERANKER_URL`。
 - 配置层已识别 SQLite、MySQL、PostgreSQL 三类 `DATABASE_URL`，后续持久化层基于 SQLx 接入。
 - 已新增 `frontend/` Vue 3 + TypeScript + Vite 项目骨架，开发时通过 Vite proxy 调用后端。
 - 当前文档/用户数据仍使用 `GUGLERAG_DATA` JSON 文件作为 MVP fallback，数据库持久化是下一阶段重点。
@@ -169,6 +170,10 @@
 | `EMBEDDING_MODEL`     | 模型名称（如 `BAAI/bge-large-zh-v1.5`） | `BAAI/bge-large-zh-v1.5`     |
 | `SILICONFLOW_URL`     | SiliconFlow API 地址（远程模式必填）    | `https://api.siliconflow.cn` |
 | `SILICONFLOW_API_KEY` | SiliconFlow API Key（远程模式必填）     | 空                           |
+| `RERANKER_ENABLED`    | 是否启用重排模型                        | `false`                      |
+| `RERANKER_PROVIDER`   | `local` / `siliconflow` / `custom_http` | `siliconflow`                |
+| `RERANKER_MODEL`      | 重排模型名称                            | `BAAI/bge-reranker-v2-m3`    |
+| `RERANKER_URL`        | 自定义重排 HTTP 服务地址                | 空                           |
 | `JWT_SECRET`          | JWT 签名密钥                            | （必须设置）                 |
 | `MCP_ENABLED`         | 是否启用 MCP 端点                       | `true`                       |
 

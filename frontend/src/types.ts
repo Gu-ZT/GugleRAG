@@ -15,6 +15,10 @@ export interface SetupStatus {
     mcp_auth_required: boolean;
     embedding_provider: string;
     embedding_model: string;
+    reranker_enabled: boolean;
+    reranker_provider: string;
+    reranker_model: string;
+    reranker_url: string;
   };
 }
 
@@ -27,6 +31,10 @@ export interface SetupPayload {
   embedding_model: string;
   siliconflow_url: string;
   siliconflow_api_key: string;
+  reranker_enabled: boolean;
+  reranker_provider: "local" | "siliconflow" | "custom_http";
+  reranker_model: string;
+  reranker_url: string;
   mcp_enabled: boolean;
   mcp_auth_required: boolean;
 }

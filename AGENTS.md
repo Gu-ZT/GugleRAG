@@ -4,6 +4,8 @@
 
 - The repository is a Rust backend at the root plus a Vue 3/Vite frontend in `frontend/`.
 - Setup UI must be implemented in Vue under `frontend/`; do not add embedded HTML strings to Rust handlers.
+- Setup should remain a step-by-step wizard, not a single long all-fields form.
+- Keep reranker config support in setup and `.env`: `RERANKER_ENABLED`, `RERANKER_PROVIDER`, `RERANKER_MODEL`, `RERANKER_URL`.
 - The backend serves `frontend/dist` static files in production and falls back to `frontend/dist/index.html` for SPA routes.
 - If `.env` is missing, the Vue app must show the setup UI and `/api/setup` may write the first `.env`. Once `.env` exists, setup writes are rejected.
 - `DATABASE_URL` must remain database-vendor neutral. Keep support for SQLite, MySQL, and PostgreSQL URL prefixes when adding SQLx persistence.

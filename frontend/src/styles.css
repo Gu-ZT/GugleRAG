@@ -38,6 +38,17 @@ button {
   cursor: pointer;
 }
 
+button.secondary {
+  border-color: var(--line);
+  background: white;
+  color: var(--ink);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 input,
 select {
   width: 100%;
@@ -91,6 +102,43 @@ label {
   align-content: space-between;
 }
 
+.step-list {
+  display: grid;
+  gap: 8px;
+}
+
+.step-list button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-color: rgba(255, 255, 255, 0.18);
+  background: transparent;
+  color: #d9e4ea;
+  text-align: left;
+}
+
+.step-list button.active {
+  border-color: #8fd5df;
+  background: rgba(143, 213, 223, 0.12);
+  color: white;
+}
+
+.step-list button.done {
+  color: #8fd5df;
+}
+
+.step-list span {
+  width: 24px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.1);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .eyebrow {
   color: #8fd5df;
   font-size: 12px;
@@ -132,6 +180,24 @@ label {
   box-shadow: 0 14px 40px rgba(22, 33, 43, 0.08);
 }
 
+.form-head {
+  display: grid;
+  gap: 4px;
+}
+
+.form-head span {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.form-head h2 {
+  margin: 0;
+  font-size: 24px;
+}
+
 .setup-form section {
   display: grid;
   gap: 12px;
@@ -146,6 +212,18 @@ label {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.db-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.db-examples button {
+  border-color: var(--line);
+  background: var(--accent-soft);
+  color: #0c5361;
 }
 
 .check {
@@ -250,5 +328,9 @@ label {
 
   button {
     width: 100%;
+  }
+
+  .db-examples {
+    display: grid;
   }
 }

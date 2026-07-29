@@ -84,6 +84,10 @@ struct Config {
     embedding_provider: String,
     embedding_model: String,
     siliconflow_url: String,
+    reranker_enabled: bool,
+    reranker_provider: String,
+    reranker_model: String,
+    reranker_url: String,
 }
 
 impl Config {
@@ -123,6 +127,11 @@ impl Config {
             embedding_model: env::var("EMBEDDING_MODEL").unwrap_or_else(|_| "none".to_string()),
             siliconflow_url: env::var("SILICONFLOW_URL")
                 .unwrap_or_else(|_| "https://api.siliconflow.cn".to_string()),
+            reranker_enabled: env_bool("RERANKER_ENABLED", false),
+            reranker_provider: env::var("RERANKER_PROVIDER").unwrap_or_else(|_| "none".to_string()),
+            reranker_model: env::var("RERANKER_MODEL")
+                .unwrap_or_else(|_| "BAAI/bge-reranker-v2-m3".to_string()),
+            reranker_url: env::var("RERANKER_URL").unwrap_or_default(),
         }
     }
 }
@@ -193,6 +202,26 @@ fn validate_setup(input: &SetupRequest) -> Result<(), AppError> {
             "SILICONFLOW_API_KEY is required for siliconflow embeddings".to_string(),
         ));
     }
+    if input.reranker_enabled {
+        match input.reranker_provider.as_str() {
+            "local" | "siliconflow" | "custom_http" => {}
+            _ => {
+                return Err(AppError::BadRequest(
+                    "RERANKER_PROVIDER must be local, siliconflow, or custom_http".to_string(),
+                ));
+            }
+        }
+        if input.reranker_model.trim().is_empty() {
+            return Err(AppError::BadRequest(
+                "RERANKER_MODEL is required when reranker is enabled".to_string(),
+            ));
+        }
+        if input.reranker_provider == "custom_http" && input.reranker_url.trim().is_empty() {
+            return Err(AppError::BadRequest(
+                "RERANKER_URL is required for custom_http reranker".to_string(),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -237,6 +266,10 @@ fn render_env_file(input: &SetupRequest) -> String {
         format!("EMBEDDING_MODEL={}", env_escape(&input.embedding_model)),
         format!("SILICONFLOW_URL={}", env_escape(siliconflow_url)),
         format!("SILICONFLOW_API_KEY={}", env_escape(siliconflow_api_key)),
+        format!("RERANKER_ENABLED={}", input.reranker_enabled),
+        format!("RERANKER_PROVIDER={}", env_escape(&input.reranker_provider)),
+        format!("RERANKER_MODEL={}", env_escape(&input.reranker_model)),
+        format!("RERANKER_URL={}", env_escape(&input.reranker_url)),
         format!("MCP_ENABLED={}", input.mcp_enabled),
         format!("MCP_AUTH_REQUIRED={}", input.mcp_auth_required),
         String::new(),
@@ -429,6 +462,10 @@ struct SetupRequest {
     embedding_model: String,
     siliconflow_url: Option<String>,
     siliconflow_api_key: Option<String>,
+    reranker_enabled: bool,
+    reranker_provider: String,
+    reranker_model: String,
+    reranker_url: String,
     mcp_enabled: bool,
     mcp_auth_required: bool,
 }
@@ -492,6 +529,12 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
             "provider": state.config.embedding_provider,
             "model": state.config.embedding_model,
             "siliconflow_url": state.config.siliconflow_url
+        },
+        "reranker": {
+            "enabled": state.config.reranker_enabled,
+            "provider": state.config.reranker_provider,
+            "model": state.config.reranker_model,
+            "url": state.config.reranker_url
         }
     }))
 }
@@ -511,7 +554,11 @@ async fn setup_status(State(state): State<AppState>) -> Json<Value> {
             "mcp_enabled": state.config.mcp_enabled,
             "mcp_auth_required": state.config.mcp_auth_required,
             "embedding_provider": state.config.embedding_provider,
-            "embedding_model": state.config.embedding_model
+            "embedding_model": state.config.embedding_model,
+            "reranker_enabled": state.config.reranker_enabled,
+            "reranker_provider": state.config.reranker_provider,
+            "reranker_model": state.config.reranker_model,
+            "reranker_url": state.config.reranker_url
         }
     }))
 }

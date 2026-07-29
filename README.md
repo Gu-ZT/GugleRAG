@@ -28,12 +28,13 @@ npm install
 npm run dev
 ```
 
-Open the Vite URL, usually `http://127.0.0.1:5173/`. If `.env` does not exist, the Vue app shows the setup page and writes `.env` through `/api/setup` with:
+Open the Vite URL, usually `http://127.0.0.1:5173/`. If `.env` does not exist, the Vue app shows a step-by-step setup wizard and writes `.env` through `/api/setup` with:
 
 - `SERVER_HOST` and `SERVER_PORT`
 - `DATABASE_URL` for SQLite, MySQL, or PostgreSQL
 - `JWT_SECRET`
 - embedding and SiliconFlow settings
+- optional reranker settings
 - MCP enablement and auth requirement
 
 Restart the backend after saving `.env`.
@@ -67,6 +68,17 @@ Useful endpoints:
 - `GET/PUT/DELETE /api/documents/{id}`
 - `GET /api/search?q=...`
 - `POST /mcp`
+
+## Retrieval Configuration
+
+Embedding is controlled by `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `SILICONFLOW_URL`, and `SILICONFLOW_API_KEY`.
+
+Reranking is optional and controlled by:
+
+- `RERANKER_ENABLED=true|false`
+- `RERANKER_PROVIDER=local|siliconflow|custom_http`
+- `RERANKER_MODEL=BAAI/bge-reranker-v2-m3`
+- `RERANKER_URL=http://...` for custom HTTP reranker services
 
 ## Frontend
 
