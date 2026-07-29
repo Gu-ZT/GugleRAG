@@ -30,7 +30,8 @@ const form = reactive<SetupPayload>({
   reranker_model: "BAAI/bge-reranker-v2-m3",
   reranker_url: "",
   mcp_enabled: true,
-  mcp_auth_required: false
+  mcp_auth_required: false,
+  mcp_public_url: ""
 });
 
 const activeStep = computed(() => steps[currentStep.value]);
@@ -143,6 +144,7 @@ async function saveSetup() {
       <section v-else class="form-section">
         <label class="check"><input v-model="form.mcp_enabled" type="checkbox" />启用 MCP 端点</label>
         <label class="check"><input v-model="form.mcp_auth_required" type="checkbox" />MCP 调用需要 Bearer Token</label>
+        <label>MCP 公网地址（可选）<input v-model="form.mcp_public_url" placeholder="https://kb.example.com" /></label>
         <p class="hint">公开部署时建议启用 MCP 认证。保存后需要重启后端服务读取 .env。</p>
       </section>
 

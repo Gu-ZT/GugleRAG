@@ -35,6 +35,21 @@ pub fn build_router(state: AppState) -> Router {
         .with_state(state)
 }
 
+pub async fn build_test_router(
+    database_url: &str,
+    jwt_secret: &str,
+) -> Result<Router, error::AppError> {
+    sqlx::any::install_default_drivers();
+    let config = config::Config::for_test(database_url.to_string(), jwt_secret.to_string());
+    config::prepare_database_path(&config.database).await;
+    let database = db::Database::connect(&config.database.url).await?;
+    database.migrate().await?;
+    Ok(build_router(AppState {
+        database,
+        config: Arc::new(config),
+    }))
+}
+
 pub async fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(

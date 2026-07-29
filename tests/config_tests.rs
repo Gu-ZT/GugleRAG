@@ -19,6 +19,7 @@ fn valid_setup() -> SetupRequest {
         reranker_url: "http://127.0.0.1:9000/rerank".to_string(),
         mcp_enabled: true,
         mcp_auth_required: false,
+        mcp_public_url: None,
     }
 }
 

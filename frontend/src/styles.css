@@ -293,7 +293,7 @@ label {
 .workspace {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: 360px minmax(0, 1fr);
 }
 
 .workspace aside {
@@ -303,6 +303,8 @@ label {
   display: grid;
   align-content: start;
   gap: 14px;
+  max-height: 100vh;
+  overflow: auto;
 }
 
 .brand-row {
@@ -338,6 +340,94 @@ label {
   gap: 8px;
 }
 
+.context-selectors,
+.sidebar-section-list {
+  display: grid;
+  gap: 12px;
+}
+
+.sidebar-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.sidebar-tabs button {
+  border-color: var(--line);
+  background: white;
+  color: var(--ink);
+  padding: 8px;
+}
+
+.sidebar-tabs button.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: #0c5361;
+}
+
+.sidebar-section-list section {
+  display: grid;
+  gap: 9px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.sidebar-section-list h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.inline-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+}
+
+.inline-form button {
+  padding-inline: 11px;
+}
+
+.member-list {
+  display: grid;
+  gap: 6px;
+}
+
+.member-list div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.member-list small {
+  color: var(--muted);
+}
+
+.mcp-output {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f8fafb;
+  padding: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
+.invite-output {
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f8fafb;
+  padding: 8px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-size: 11px;
+}
+
 .doc-list {
   display: grid;
   gap: 8px;
@@ -368,7 +458,7 @@ label {
   font-size: 12px;
 }
 
-.workspace section {
+.workspace > section {
   padding: 24px;
 }
 
@@ -385,6 +475,7 @@ label {
 
 .toolbar h1 {
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .toolbar span {
@@ -513,5 +604,11 @@ label {
 
   .editor-grid {
     grid-template-columns: 1fr;
+  }
+
+  .workspace aside {
+    max-height: none;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
   }
 }

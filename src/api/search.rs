@@ -1,3 +1,4 @@
+use super::collaboration;
 use crate::{AppState, auth, domain::SearchResult, error::AppError, search as search_engine};
 use axum::{
     Json,
@@ -5,11 +6,13 @@ use axum::{
     http::HeaderMap,
 };
 use serde::Deserialize;
+use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct SearchQuery {
     pub(crate) q: String,
     pub(crate) limit: Option<usize>,
+    pub(crate) knowledge_base_id: Option<Uuid>,
 }
 
 pub(crate) async fn search_documents(
@@ -17,8 +20,15 @@ pub(crate) async fn search_documents(
     headers: HeaderMap,
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<Vec<SearchResult>>, AppError> {
-    auth::require_user(&headers, &state).await?;
-    let documents = state.database.all_documents().await?;
+    let user_id = auth::require_user(&headers, &state).await?;
+    let knowledge_base = match query.knowledge_base_id {
+        Some(id) => collaboration::require_knowledge_base_access(&state, user_id, id).await?,
+        None => collaboration::default_knowledge_base(&state, user_id).await?,
+    };
+    let documents = state
+        .database
+        .all_documents_for_knowledge_base(knowledge_base.id)
+        .await?;
     Ok(Json(search_engine::search_documents(
         &documents,
         &query.q,

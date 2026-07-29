@@ -6,6 +6,7 @@ fn document(title: &str, content: &str, tags: &[&str], age_minutes: i64) -> Docu
     let timestamp = Utc::now() - Duration::minutes(age_minutes);
     Document {
         id: Uuid::new_v4(),
+        knowledge_base_id: Uuid::new_v4(),
         title: title.to_string(),
         content: content.to_string(),
         parent_id: None,

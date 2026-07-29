@@ -23,7 +23,7 @@ GugleRAG is a self-hosted team knowledge base with Markdown documents, REST APIs
 └── AGENTS.md            # Agent/developer working notes
 ```
 
-The backend stores users, documents, and document versions through SQLx. Runtime configuration accepts SQLite, MySQL, and PostgreSQL `DATABASE_URL` values.
+The backend stores users, workspaces, teams, memberships, knowledge bases, documents, versions, invitations, and scoped MCP tokens through SQLx. Runtime configuration accepts SQLite, MySQL, and PostgreSQL `DATABASE_URL` values.
 
 ## First Run
 
@@ -46,6 +46,7 @@ Open the Vite URL, usually `http://127.0.0.1:5173/`. If `.env` does not exist, t
 - embedding and SiliconFlow settings
 - optional reranker settings
 - MCP enablement and auth requirement
+- optional `MCP_PUBLIC_URL` for reverse-proxy deployments
 
 Restart the backend after saving `.env`.
 
@@ -82,10 +83,46 @@ Useful endpoints:
 - `POST /api/setup`
 - `POST /api/auth/register`
 - `POST /api/auth/login`
+- `GET /api/workspaces`
+- `GET/POST /api/workspaces/{workspace_id}/knowledge-bases`
+- `GET/POST /api/teams`
+- `GET /api/teams/{team_id}/members`
+- `POST /api/teams/{team_id}/invitations`
+- `GET /api/invitations`
+- `POST /api/invitations/{token}/accept`
 - `GET/POST /api/documents`
 - `GET/PUT/DELETE /api/documents/{id}`
 - `GET /api/search?q=...`
 - `POST /mcp`
+- `POST /mcp/{user|group|all}/{scoped_token}`
+
+## Collaboration and MCP
+
+Every user receives a personal workspace and its default knowledge base. Creating a team creates a team workspace and default knowledge base; team owners and admins can invite existing users by username. The invitation token can be shared with the invited user, who accepts it from the collaboration panel. A user may belong to multiple teams.
+
+Documents belong to a knowledge base. Document and search requests accept `knowledge_base_id`; when it is omitted, the personal default knowledge base is used for backward compatibility.
+
+The Vue workspace generates and copies three independent MCP configurations through `POST /api/mcp/configs`:
+
+```json
+{
+  "scope": "user"
+}
+```
+
+Use `scope: "group"` with a `team_id` for one team workspace, or `scope: "all"` for every knowledge base the account can access. The response follows the requested streamable HTTP shape:
+
+```json
+{
+  "type": "streamable-http",
+  "url": "http://127.0.0.1:8080/mcp/user/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "headers": {
+    "Authorization": "Bearer xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  }
+}
+```
+
+Scoped MCP tokens are stored hashed in the database. The URL token and Bearer token must match, and access is checked again on every request. Set `MCP_PUBLIC_URL` when the server is behind a public hostname or reverse proxy.
 
 ## Retrieval Configuration
 
@@ -112,6 +149,9 @@ The current Vue workspace supports:
 
 - user registration and login
 - token persistence in local storage
+- personal and team workspace switching
+- multiple knowledge bases per workspace
+- team creation, member lists, invitations, and invitation acceptance
 - document list, create, edit, save, delete
 - tag editing
 - keyword search over title, content, and tags

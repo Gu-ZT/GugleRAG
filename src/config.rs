@@ -21,6 +21,7 @@ pub struct Config {
     pub(crate) reranker_provider: String,
     pub(crate) reranker_model: String,
     pub(crate) reranker_url: String,
+    pub(crate) mcp_public_url: String,
 }
 
 impl Config {
@@ -60,6 +61,28 @@ impl Config {
             reranker_model: env::var("RERANKER_MODEL")
                 .unwrap_or_else(|_| "BAAI/bge-reranker-v2-m3".to_string()),
             reranker_url: env::var("RERANKER_URL").unwrap_or_default(),
+            mcp_public_url: env::var("MCP_PUBLIC_URL").unwrap_or_default(),
+        }
+    }
+
+    pub(crate) fn for_test(database_url: String, jwt_secret: String) -> Self {
+        Self {
+            host: "127.0.0.1".to_string(),
+            port: 0,
+            env_path: PathBuf::from(".env"),
+            setup_required: false,
+            database: DatabaseConfig::from_url(database_url),
+            jwt_secret,
+            mcp_enabled: true,
+            mcp_auth_required: true,
+            embedding_provider: "stub".to_string(),
+            embedding_model: "none".to_string(),
+            siliconflow_url: "https://api.siliconflow.cn".to_string(),
+            reranker_enabled: false,
+            reranker_provider: "none".to_string(),
+            reranker_model: "none".to_string(),
+            reranker_url: String::new(),
+            mcp_public_url: String::new(),
         }
     }
 }
@@ -116,6 +139,8 @@ pub struct SetupRequest {
     pub reranker_url: String,
     pub mcp_enabled: bool,
     pub mcp_auth_required: bool,
+    #[serde(default)]
+    pub mcp_public_url: Option<String>,
 }
 
 pub fn validate_setup(input: &SetupRequest) -> Result<(), AppError> {
@@ -249,6 +274,10 @@ pub fn render_env_file(input: &SetupRequest) -> String {
         format!("RERANKER_URL={}", env_escape(&input.reranker_url)),
         format!("MCP_ENABLED={}", input.mcp_enabled),
         format!("MCP_AUTH_REQUIRED={}", input.mcp_auth_required),
+        format!(
+            "MCP_PUBLIC_URL={}",
+            env_escape(input.mcp_public_url.as_deref().unwrap_or_default())
+        ),
         String::new(),
     ]
     .join("\n")

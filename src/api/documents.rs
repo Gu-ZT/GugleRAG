@@ -1,3 +1,4 @@
+use super::collaboration;
 use crate::{
     AppState, auth,
     auth::can_edit,
@@ -19,11 +20,13 @@ pub(crate) struct DocumentRequest {
     pub(crate) content: Option<String>,
     pub(crate) parent_id: Option<Uuid>,
     pub(crate) tags: Option<Vec<String>>,
+    pub(crate) knowledge_base_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ListQuery {
     pub(crate) parent_id: Option<Uuid>,
+    pub(crate) knowledge_base_id: Option<Uuid>,
 }
 
 pub(crate) async fn list_documents(
@@ -31,8 +34,14 @@ pub(crate) async fn list_documents(
     headers: HeaderMap,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<Document>>, AppError> {
-    auth::require_user(&headers, &state).await?;
-    Ok(Json(state.database.list_documents(query.parent_id).await?))
+    let user_id = auth::require_user(&headers, &state).await?;
+    let knowledge_base = resolve_knowledge_base(&state, user_id, query.knowledge_base_id).await?;
+    Ok(Json(
+        state
+            .database
+            .list_documents(query.parent_id, knowledge_base.id)
+            .await?,
+    ))
 }
 
 pub(crate) async fn create_document(
@@ -41,10 +50,12 @@ pub(crate) async fn create_document(
     Json(input): Json<DocumentRequest>,
 ) -> Result<Json<Document>, AppError> {
     let user_id = auth::require_user(&headers, &state).await?;
+    let knowledge_base = resolve_knowledge_base(&state, user_id, input.knowledge_base_id).await?;
     let title = auth::require_non_empty(input.title, "title")?;
     let now = Utc::now();
     let doc = Document {
         id: Uuid::new_v4(),
+        knowledge_base_id: knowledge_base.id,
         title,
         content: input.content.unwrap_or_default(),
         parent_id: input.parent_id,
@@ -55,9 +66,7 @@ pub(crate) async fn create_document(
         versions: Vec::new(),
     };
     if let Some(parent_id) = doc.parent_id {
-        if !state.database.document_exists(parent_id).await? {
-            return Err(AppError::BadRequest("parent_id does not exist".to_string()));
-        }
+        require_parent_in_knowledge_base(&state, parent_id, doc.knowledge_base_id).await?;
     }
     state.database.insert_document(&doc).await?;
     Ok(Json(doc))
@@ -68,12 +77,13 @@ pub(crate) async fn read_document(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Document>, AppError> {
-    auth::require_user(&headers, &state).await?;
+    let user_id = auth::require_user(&headers, &state).await?;
     let doc = state
         .database
         .get_document(id)
         .await?
         .ok_or_else(|| AppError::NotFound("document not found".to_string()))?;
+    collaboration::require_knowledge_base_access(&state, user_id, doc.knowledge_base_id).await?;
     Ok(Json(doc))
 }
 
@@ -92,21 +102,27 @@ pub(crate) async fn update_document(
     if !can_edit(&user) {
         return Err(AppError::Forbidden("insufficient role".to_string()));
     }
+    let mut doc = state
+        .database
+        .get_document(id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("document not found".to_string()))?;
+    collaboration::require_knowledge_base_access(&state, user_id, doc.knowledge_base_id).await?;
+    if let Some(knowledge_base_id) = input.knowledge_base_id {
+        if knowledge_base_id != doc.knowledge_base_id {
+            return Err(AppError::BadRequest(
+                "moving documents between knowledge bases is not supported".to_string(),
+            ));
+        }
+    }
     if let Some(parent_id) = input.parent_id {
         if parent_id == id {
             return Err(AppError::BadRequest(
                 "document cannot be its own parent".to_string(),
             ));
         }
-        if !state.database.document_exists(parent_id).await? {
-            return Err(AppError::BadRequest("parent_id does not exist".to_string()));
-        }
+        require_parent_in_knowledge_base(&state, parent_id, doc.knowledge_base_id).await?;
     }
-    let mut doc = state
-        .database
-        .get_document(id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("document not found".to_string()))?;
     if input.content.is_some() {
         let version = DocumentVersion {
             content: doc.content.clone(),
@@ -128,9 +144,8 @@ pub(crate) async fn update_document(
         doc.tags = tags;
     }
     doc.updated_at = Utc::now();
-    let updated = doc.clone();
-    state.database.update_document(&updated).await?;
-    Ok(Json(updated))
+    state.database.update_document(&doc).await?;
+    Ok(Json(doc))
 }
 
 pub(crate) async fn delete_document(
@@ -147,6 +162,37 @@ pub(crate) async fn delete_document(
     if !can_edit(&user) {
         return Err(AppError::Forbidden("insufficient role".to_string()));
     }
+    let doc = state
+        .database
+        .get_document(id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("document not found".to_string()))?;
+    collaboration::require_knowledge_base_access(&state, user_id, doc.knowledge_base_id).await?;
     state.database.delete_document_tree(id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn resolve_knowledge_base(
+    state: &AppState,
+    user_id: Uuid,
+    knowledge_base_id: Option<Uuid>,
+) -> Result<crate::domain::KnowledgeBase, AppError> {
+    match knowledge_base_id {
+        Some(id) => collaboration::require_knowledge_base_access(state, user_id, id).await,
+        None => collaboration::default_knowledge_base(state, user_id).await,
+    }
+}
+
+async fn require_parent_in_knowledge_base(
+    state: &AppState,
+    parent_id: Uuid,
+    knowledge_base_id: Uuid,
+) -> Result<(), AppError> {
+    let parent = state.database.get_document(parent_id).await?;
+    if !matches!(parent, Some(ref doc) if doc.knowledge_base_id == knowledge_base_id) {
+        return Err(AppError::BadRequest(
+            "parent_id must exist in the same knowledge base".to_string(),
+        ));
+    }
+    Ok(())
 }

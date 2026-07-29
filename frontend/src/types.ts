@@ -37,10 +37,12 @@ export interface SetupPayload {
   reranker_url: string;
   mcp_enabled: boolean;
   mcp_auth_required: boolean;
+  mcp_public_url: string;
 }
 
 export interface DocumentItem {
   id: string;
+  knowledge_base_id: string;
   title: string;
   content?: string;
   tags: string[];
@@ -71,4 +73,59 @@ export interface PublicUser {
 export interface AuthResponse {
   token: string;
   user: PublicUser;
+}
+
+export interface Workspace {
+  id: string;
+  name: string;
+  kind: "personal" | "team";
+  owner_id?: string;
+  team_id?: string;
+}
+
+export interface KnowledgeBase {
+  id: string;
+  workspace_id: string;
+  name: string;
+  description: string;
+  created_at: string;
+}
+
+export interface Team {
+  id: string;
+  name: string;
+  owner_id: string;
+  workspace_id: string;
+  created_at: string;
+}
+
+export interface TeamMember {
+  user_id: string;
+  username: string;
+  display_name: string;
+  role: "owner" | "admin" | "member";
+  joined_at: string;
+}
+
+export interface TeamInvitation {
+  id: string;
+  team_id: string;
+  team_name: string;
+  inviter_id: string;
+  invitee_id: string;
+  status: string;
+  created_at: string;
+}
+
+export interface InvitationResponse {
+  invitation: TeamInvitation;
+  invite_token: string;
+}
+
+export interface McpConfig {
+  type: "streamable-http";
+  url: string;
+  headers: {
+    Authorization: string;
+  };
 }

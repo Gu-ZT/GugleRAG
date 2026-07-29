@@ -76,6 +76,12 @@ pub(crate) fn hash_password(salt: &str, password: &str) -> String {
     STANDARD_NO_PAD.encode(hasher.finalize())
 }
 
+pub(crate) fn hash_access_token(token: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    STANDARD_NO_PAD.encode(hasher.finalize())
+}
+
 pub fn validate_username(username: &str) -> Result<(), AppError> {
     let username = username.trim();
     if username.len() < 3 || username.len() > 40 {

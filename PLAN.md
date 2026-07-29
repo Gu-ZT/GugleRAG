@@ -11,6 +11,7 @@
 - Vue 工作台已支持注册/登录、文档列表、新建、编辑、保存、删除、标签和搜索。
 - Rust 后端已拆分为配置、领域模型、数据库、认证、REST API、MCP、搜索和错误处理模块，`main.rs` 仅保留启动入口。
 - 后端配置、账号校验和关键词排序已由顶层 `tests/` 集成测试覆盖。
+- 已加入个人/团队工作区、多知识库、团队成员邀请与加入，以及按用户/团队/全部可访问知识库隔离的 MCP 配置。
 
 ## 1. 项目概述
 
@@ -49,8 +50,8 @@
 ### 3.1 用户与团队管理
 
 - [x] 用户注册 / 登录（JWT 认证）
-- [ ] 工作区（Workspace）创建与切换
-- [ ] 工作区成员邀请与管理（角色：管理员、编辑、只读）
+- [x] 工作区（Workspace）创建与切换
+- [x] 工作区成员邀请与管理（团队 Owner/Admin/Member）
 - [ ] 个人资料与密码修改
 
 ### 3.2 知识库文档管理
@@ -79,16 +80,17 @@
 
 ### 3.5 MCP 服务（核心）
 
-- [ ] 实现 MCP 协议的服务器端点（HTTP 路径 `/mcp`）
-- [ ] 暴露至少以下工具（Tools）供 Agent 调用：
+- [x] 实现 MCP 协议的服务器端点（HTTP 路径 `/mcp`）
+- [x] 暴露至少以下工具（Tools）供 Agent 调用：
     - `search_knowledge(query, limit)` — 全文/语义混合搜索
     - `read_document(doc_id)` — 获取文档完整内容
     - `create_document(title, content, parent_id)` — 新建文档
     - `update_document(doc_id, content)` — 更新文档
     - `list_documents(folder_id)` — 列出目录结构
     - `get_document_metadata(doc_id)` — 获取元数据
-- [ ] 工具返回结构符合 MCP 规范（JSON-RPC 响应）
-- [ ] 支持通过 MCP 进行用户认证（可配置）
+- [x] 工具返回结构符合 MCP 规范（JSON-RPC 响应）
+- [x] 支持通过 MCP 进行用户认证（可配置）
+- [x] 支持个人、团队和全部可访问知识库的独立 MCP 配置
 
 ### 3.6 前端界面（Vue3 + TS）
 
