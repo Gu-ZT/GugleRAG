@@ -9,7 +9,7 @@
 - The backend serves `frontend/dist` static files in production and falls back to `frontend/dist/index.html` for SPA routes.
 - If `.env` is missing, the Vue app must show the setup UI and `/api/setup` may write the first `.env`. Once `.env` exists, setup writes are rejected.
 - `DATABASE_URL` must remain database-vendor neutral. Keep support for SQLite, MySQL, and PostgreSQL URL prefixes when adding SQLx persistence.
-- The current MVP still stores documents/users in `GUGLERAG_DATA` JSON. Replace this through a repository layer instead of coupling handlers directly to SQLx.
+- Users, documents, and document versions are persisted through SQLx. Keep query code database-vendor neutral.
 - Do not commit `.env`, local data files, `target/`, `frontend/node_modules/`, or `frontend/dist/`.
 - Frontend development should happen in `frontend/` with Vue 3, TypeScript, and Vite. The Vite proxy expects the backend on `127.0.0.1:8080`.
 

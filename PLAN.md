@@ -7,7 +7,7 @@
 - 已加入可选重排模型配置：`RERANKER_ENABLED`、`RERANKER_PROVIDER`、`RERANKER_MODEL`、`RERANKER_URL`。
 - 配置层已识别 SQLite、MySQL、PostgreSQL 三类 `DATABASE_URL`，后续持久化层基于 SQLx 接入。
 - 已新增 `frontend/` Vue 3 + TypeScript + Vite 项目骨架，开发时通过 Vite proxy 调用后端。
-- 当前文档/用户数据仍使用 `GUGLERAG_DATA` JSON 文件作为 MVP fallback，数据库持久化是下一阶段重点。
+- 用户、文档和版本历史已通过 SQLx 持久化到配置的数据库。
 
 ## 1. 项目概述
 
@@ -165,7 +165,7 @@
 |-----------------------|-----------------------------------------|------------------------------|
 | `SERVER_HOST`         | 监听地址                                | `0.0.0.0`                    |
 | `SERVER_PORT`         | 监听端口                                | `8080`                       |
-| `DATABASE_URL`        | 数据库连接串（SQLite/MySQL/PostgreSQL） | `sqlite://data/guglerag.db`  |
+| `DATABASE_URL`        | 数据库连接串（SQLite/MySQL/PostgreSQL） | `sqlite://data/guglerag.db?mode=rwc` |
 | `EMBEDDING_PROVIDER`  | `local` 或 `siliconflow`                | `local`                      |
 | `EMBEDDING_MODEL`     | 模型名称（如 `BAAI/bge-large-zh-v1.5`） | `BAAI/bge-large-zh-v1.5`     |
 | `SILICONFLOW_URL`     | SiliconFlow API 地址（远程模式必填）    | `https://api.siliconflow.cn` |

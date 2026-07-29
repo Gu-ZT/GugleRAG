@@ -11,8 +11,9 @@ use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode}
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{collections::HashMap, env, net::SocketAddr, path::PathBuf, sync::Arc};
-use tokio::{fs, net::TcpListener, sync::RwLock};
+use sqlx::{AnyPool, Row, any::AnyPoolOptions};
+use std::{env, net::SocketAddr, path::PathBuf, sync::Arc};
+use tokio::{fs, net::TcpListener};
 use tower_http::{
     services::{ServeDir, ServeFile},
     trace::TraceLayer,
@@ -29,10 +30,18 @@ async fn main() {
         )
         .init();
 
+    sqlx::any::install_default_drivers();
     let config = Config::from_env();
-    let store = Store::load(&config.data_path).await.unwrap_or_default();
+    prepare_database_path(&config.database).await;
+    let database = Database::connect(&config.database.url)
+        .await
+        .expect("failed to connect database");
+    database
+        .migrate()
+        .await
+        .expect("failed to migrate database");
     let state = AppState {
-        store: Arc::new(RwLock::new(store)),
+        database,
         config: Arc::new(config.clone()),
     };
 
@@ -77,7 +86,6 @@ struct Config {
     env_path: PathBuf,
     setup_required: bool,
     database: DatabaseConfig,
-    data_path: PathBuf,
     jwt_secret: String,
     mcp_enabled: bool,
     mcp_auth_required: bool,
@@ -102,8 +110,8 @@ impl Config {
             }
         }
 
-        let database_url =
-            env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://data/guglerag.db".to_string());
+        let database_url = env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "sqlite://data/guglerag.db?mode=rwc".to_string());
         let database = DatabaseConfig::from_url(database_url);
 
         Self {
@@ -115,9 +123,6 @@ impl Config {
             env_path,
             setup_required,
             database,
-            data_path: env::var("GUGLERAG_DATA")
-                .unwrap_or_else(|_| "data.json".to_string())
-                .into(),
             jwt_secret: env::var("JWT_SECRET")
                 .unwrap_or_else(|_| "development-only-change-me-before-production".to_string()),
             mcp_enabled: env_bool("MCP_ENABLED", true),
@@ -158,6 +163,11 @@ impl DatabaseConfig {
             DatabaseEngine::Postgres
         } else {
             DatabaseEngine::Sqlite
+        };
+        let url = if matches!(engine, DatabaseEngine::Sqlite) && !url.contains('?') {
+            format!("{url}?mode=rwc")
+        } else {
+            url
         };
         Self { engine, url }
     }
@@ -241,6 +251,33 @@ fn validate_database_url(url: &str) -> Result<DatabaseEngine, AppError> {
     }
 }
 
+async fn prepare_database_path(database: &DatabaseConfig) {
+    if !matches!(database.engine, DatabaseEngine::Sqlite) {
+        return;
+    }
+    let path = database
+        .url
+        .split('?')
+        .next()
+        .unwrap_or(&database.url)
+        .trim_start_matches("sqlite://")
+        .trim_start_matches("sqlite:");
+    if path == ":memory:" {
+        return;
+    }
+    let path = PathBuf::from(path);
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            if let Err(error) = fs::create_dir_all(parent).await {
+                warn!(
+                    "failed to create sqlite database directory {}: {error}",
+                    parent.display()
+                );
+            }
+        }
+    }
+}
+
 fn render_env_file(input: &SetupRequest) -> String {
     let siliconflow_url = input
         .siliconflow_url
@@ -257,7 +294,6 @@ fn render_env_file(input: &SetupRequest) -> String {
         format!("SERVER_HOST={}", env_escape(&input.server_host)),
         format!("SERVER_PORT={}", input.server_port),
         format!("DATABASE_URL={}", env_escape(&input.database_url)),
-        "GUGLERAG_DATA=data.json".to_string(),
         format!("JWT_SECRET={}", env_escape(&input.jwt_secret)),
         format!(
             "EMBEDDING_PROVIDER={}",
@@ -318,34 +354,265 @@ fn env_bool(name: &str, default: bool) -> bool {
 
 #[derive(Clone)]
 struct AppState {
-    store: Arc<RwLock<Store>>,
+    database: Database,
     config: Arc<Config>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
-struct Store {
-    users: HashMap<Uuid, User>,
-    documents: HashMap<Uuid, Document>,
+#[derive(Clone)]
+struct Database {
+    pool: AnyPool,
 }
 
-impl Store {
-    async fn load(path: &PathBuf) -> Result<Self, AppError> {
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-        let bytes = fs::read(path).await?;
-        Ok(serde_json::from_slice(&bytes)?)
+impl Database {
+    async fn connect(url: &str) -> Result<Self, AppError> {
+        let pool = AnyPoolOptions::new()
+            .max_connections(8)
+            .connect(url)
+            .await?;
+        Ok(Self { pool })
     }
 
-    async fn save(&self, path: &PathBuf) -> Result<(), AppError> {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent).await?;
+    async fn migrate(&self) -> Result<(), AppError> {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS app_users (
+                id VARCHAR(36) PRIMARY KEY,
+                username VARCHAR(80) NOT NULL UNIQUE,
+                display_name VARCHAR(120) NOT NULL,
+                password_hash VARCHAR(128) NOT NULL,
+                salt VARCHAR(64) NOT NULL,
+                role VARCHAR(16) NOT NULL,
+                created_at VARCHAR(40) NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS documents (
+                id VARCHAR(36) PRIMARY KEY,
+                title VARCHAR(255) NOT NULL,
+                content TEXT NOT NULL,
+                parent_id VARCHAR(36),
+                tags TEXT NOT NULL,
+                author_id VARCHAR(36) NOT NULL,
+                created_at VARCHAR(40) NOT NULL,
+                updated_at VARCHAR(40) NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS document_versions (
+                id VARCHAR(36) PRIMARY KEY,
+                document_id VARCHAR(36) NOT NULL,
+                content TEXT NOT NULL,
+                saved_at VARCHAR(40) NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn user_count(&self) -> Result<i64, AppError> {
+        let row = sqlx::query("SELECT COUNT(*) AS count FROM app_users")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.try_get::<i64, _>("count")?)
+    }
+
+    async fn find_user_by_username(&self, username: &str) -> Result<Option<User>, AppError> {
+        let row = sqlx::query(
+            "SELECT id, username, display_name, password_hash, salt, role, created_at
+             FROM app_users WHERE username = ?",
+        )
+        .bind(username)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(row_to_user).transpose()
+    }
+
+    async fn get_user(&self, id: Uuid) -> Result<Option<User>, AppError> {
+        let row = sqlx::query(
+            "SELECT id, username, display_name, password_hash, salt, role, created_at
+             FROM app_users WHERE id = ?",
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(row_to_user).transpose()
+    }
+
+    async fn insert_user(&self, user: &User) -> Result<(), AppError> {
+        sqlx::query(
+            "INSERT INTO app_users
+             (id, username, display_name, password_hash, salt, role, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(user.id.to_string())
+        .bind(&user.username)
+        .bind(&user.display_name)
+        .bind(&user.password_hash)
+        .bind(&user.salt)
+        .bind(role_to_str(user.role))
+        .bind(user.created_at.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_documents(&self, parent_id: Option<Uuid>) -> Result<Vec<Document>, AppError> {
+        let rows = if let Some(parent_id) = parent_id {
+            sqlx::query(
+                "SELECT id, title, content, parent_id, tags, author_id, created_at, updated_at
+                 FROM documents WHERE parent_id = ? ORDER BY LOWER(title)",
+            )
+            .bind(parent_id.to_string())
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                "SELECT id, title, content, parent_id, tags, author_id, created_at, updated_at
+                 FROM documents WHERE parent_id IS NULL ORDER BY LOWER(title)",
+            )
+            .fetch_all(&self.pool)
+            .await?
+        };
+        rows.into_iter()
+            .map(row_to_document_without_versions)
+            .collect()
+    }
+
+    async fn all_documents(&self) -> Result<Vec<Document>, AppError> {
+        let rows = sqlx::query(
+            "SELECT id, title, content, parent_id, tags, author_id, created_at, updated_at
+             FROM documents",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(row_to_document_without_versions)
+            .collect()
+    }
+
+    async fn get_document(&self, id: Uuid) -> Result<Option<Document>, AppError> {
+        let row = sqlx::query(
+            "SELECT id, title, content, parent_id, tags, author_id, created_at, updated_at
+             FROM documents WHERE id = ?",
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let mut doc = row_to_document_without_versions(row)?;
+        doc.versions = self.document_versions(id).await?;
+        Ok(Some(doc))
+    }
+
+    async fn document_exists(&self, id: Uuid) -> Result<bool, AppError> {
+        let row = sqlx::query("SELECT 1 AS exists_flag FROM documents WHERE id = ?")
+            .bind(id.to_string())
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.is_some())
+    }
+
+    async fn insert_document(&self, doc: &Document) -> Result<(), AppError> {
+        sqlx::query(
+            "INSERT INTO documents
+             (id, title, content, parent_id, tags, author_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(doc.id.to_string())
+        .bind(&doc.title)
+        .bind(&doc.content)
+        .bind(doc.parent_id.map(|value| value.to_string()))
+        .bind(serde_json::to_string(&doc.tags)?)
+        .bind(doc.author_id.to_string())
+        .bind(doc.created_at.to_rfc3339())
+        .bind(doc.updated_at.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn update_document(&self, doc: &Document) -> Result<(), AppError> {
+        sqlx::query(
+            "UPDATE documents
+             SET title = ?, content = ?, parent_id = ?, tags = ?, updated_at = ?
+             WHERE id = ?",
+        )
+        .bind(&doc.title)
+        .bind(&doc.content)
+        .bind(doc.parent_id.map(|value| value.to_string()))
+        .bind(serde_json::to_string(&doc.tags)?)
+        .bind(doc.updated_at.to_rfc3339())
+        .bind(doc.id.to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn insert_document_version(
+        &self,
+        document_id: Uuid,
+        version: &DocumentVersion,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            "INSERT INTO document_versions (id, document_id, content, saved_at)
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(document_id.to_string())
+        .bind(&version.content)
+        .bind(version.saved_at.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn delete_document_tree(&self, id: Uuid) -> Result<(), AppError> {
+        if !self.document_exists(id).await? {
+            return Err(AppError::NotFound("document not found".to_string()));
+        }
+
+        let mut stack = vec![id];
+        let mut ordered = Vec::new();
+        while let Some(current_id) = stack.pop() {
+            ordered.push(current_id);
+            let child_rows = sqlx::query("SELECT id FROM documents WHERE parent_id = ?")
+                .bind(current_id.to_string())
+                .fetch_all(&self.pool)
+                .await?;
+            for row in child_rows {
+                stack.push(parse_uuid_str(row.try_get::<String, _>("id")?)?);
             }
         }
-        let bytes = serde_json::to_vec_pretty(self)?;
-        fs::write(path, bytes).await?;
+
+        for document_id in ordered.into_iter().rev() {
+            sqlx::query("DELETE FROM document_versions WHERE document_id = ?")
+                .bind(document_id.to_string())
+                .execute(&self.pool)
+                .await?;
+            sqlx::query("DELETE FROM documents WHERE id = ?")
+                .bind(document_id.to_string())
+                .execute(&self.pool)
+                .await?;
+        }
         Ok(())
+    }
+
+    async fn document_versions(&self, document_id: Uuid) -> Result<Vec<DocumentVersion>, AppError> {
+        let rows = sqlx::query(
+            "SELECT content, saved_at FROM document_versions
+             WHERE document_id = ? ORDER BY saved_at DESC",
+        )
+        .bind(document_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_document_version).collect()
     }
 }
 
@@ -366,6 +633,72 @@ enum Role {
     Admin,
     Editor,
     Reader,
+}
+
+fn role_to_str(role: Role) -> &'static str {
+    match role {
+        Role::Admin => "admin",
+        Role::Editor => "editor",
+        Role::Reader => "reader",
+    }
+}
+
+fn parse_role(value: &str) -> Result<Role, AppError> {
+    match value {
+        "admin" => Ok(Role::Admin),
+        "editor" => Ok(Role::Editor),
+        "reader" => Ok(Role::Reader),
+        _ => Err(AppError::Internal(format!("unknown role: {value}"))),
+    }
+}
+
+fn parse_uuid_str(value: String) -> Result<Uuid, AppError> {
+    value
+        .parse()
+        .map_err(|_| AppError::Internal("invalid uuid in database".to_string()))
+}
+
+fn parse_datetime_str(value: String) -> Result<DateTime<Utc>, AppError> {
+    Ok(DateTime::parse_from_rfc3339(&value)
+        .map_err(|error| AppError::Internal(error.to_string()))?
+        .with_timezone(&Utc))
+}
+
+fn row_to_user(row: sqlx::any::AnyRow) -> Result<User, AppError> {
+    Ok(User {
+        id: parse_uuid_str(row.try_get::<String, _>("id")?)?,
+        username: row.try_get("username")?,
+        display_name: row.try_get("display_name")?,
+        password_hash: row.try_get("password_hash")?,
+        salt: row.try_get("salt")?,
+        role: parse_role(row.try_get::<String, _>("role")?.as_str())?,
+        created_at: parse_datetime_str(row.try_get("created_at")?)?,
+    })
+}
+
+fn row_to_document_without_versions(row: sqlx::any::AnyRow) -> Result<Document, AppError> {
+    let tags_json: String = row.try_get("tags")?;
+    Ok(Document {
+        id: parse_uuid_str(row.try_get::<String, _>("id")?)?,
+        title: row.try_get("title")?,
+        content: row.try_get("content")?,
+        parent_id: row
+            .try_get::<Option<String>, _>("parent_id")?
+            .map(parse_uuid_str)
+            .transpose()?,
+        tags: serde_json::from_str(&tags_json).unwrap_or_default(),
+        author_id: parse_uuid_str(row.try_get::<String, _>("author_id")?)?,
+        created_at: parse_datetime_str(row.try_get("created_at")?)?,
+        updated_at: parse_datetime_str(row.try_get("updated_at")?)?,
+        versions: Vec::new(),
+    })
+}
+
+fn row_to_document_version(row: sqlx::any::AnyRow) -> Result<DocumentVersion, AppError> {
+    Ok(DocumentVersion {
+        content: row.try_get("content")?,
+        saved_at: parse_datetime_str(row.try_get("saved_at")?)?,
+    })
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -515,6 +848,12 @@ impl From<serde_json::Error> for AppError {
     }
 }
 
+impl From<sqlx::Error> for AppError {
+    fn from(error: sqlx::Error) -> Self {
+        AppError::Internal(error.to_string())
+    }
+}
+
 async fn health(State(state): State<AppState>) -> Json<Value> {
     Json(json!({
         "status": "ok",
@@ -589,18 +928,18 @@ async fn register(
     validate_username(&input.username)?;
     validate_password(&input.password)?;
 
-    let mut store = state.store.write().await;
-    if store
-        .users
-        .values()
-        .any(|user| user.username == input.username)
+    if state
+        .database
+        .find_user_by_username(input.username.trim())
+        .await?
+        .is_some()
     {
         return Err(AppError::Conflict("username already exists".to_string()));
     }
 
     let id = Uuid::new_v4();
     let salt = Uuid::new_v4().to_string();
-    let role = if store.users.is_empty() {
+    let role = if state.database.user_count().await? == 0 {
         Role::Admin
     } else {
         Role::Editor
@@ -618,8 +957,7 @@ async fn register(
         created_at: Utc::now(),
     };
 
-    store.users.insert(id, user.clone());
-    store.save(&state.config.data_path).await?;
+    state.database.insert_user(&user).await?;
     let token = issue_token(id, &state.config.jwt_secret)?;
     Ok(Json(AuthResponse {
         token,
@@ -631,11 +969,10 @@ async fn login(
     State(state): State<AppState>,
     Json(input): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>, AppError> {
-    let store = state.store.read().await;
-    let user = store
-        .users
-        .values()
-        .find(|user| user.username == input.username)
+    let user = state
+        .database
+        .find_user_by_username(input.username.trim())
+        .await?
         .ok_or_else(|| AppError::Unauthorized("invalid username or password".to_string()))?;
 
     if user.password_hash != hash_password(&user.salt, &input.password) {
@@ -647,7 +984,7 @@ async fn login(
     let token = issue_token(user.id, &state.config.jwt_secret)?;
     Ok(Json(AuthResponse {
         token,
-        user: PublicUser::from(user),
+        user: PublicUser::from(&user),
     }))
 }
 
@@ -656,12 +993,12 @@ async fn me(
     headers: HeaderMap,
 ) -> Result<Json<PublicUser>, AppError> {
     let user_id = require_user(&headers, &state).await?;
-    let store = state.store.read().await;
-    let user = store
-        .users
-        .get(&user_id)
+    let user = state
+        .database
+        .get_user(user_id)
+        .await?
         .ok_or_else(|| AppError::Unauthorized("user no longer exists".to_string()))?;
-    Ok(Json(PublicUser::from(user)))
+    Ok(Json(PublicUser::from(&user)))
 }
 
 async fn list_documents(
@@ -670,15 +1007,7 @@ async fn list_documents(
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Vec<Document>>, AppError> {
     require_user(&headers, &state).await?;
-    let store = state.store.read().await;
-    let mut docs = store
-        .documents
-        .values()
-        .filter(|doc| doc.parent_id == query.parent_id)
-        .cloned()
-        .collect::<Vec<_>>();
-    docs.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
-    Ok(Json(docs))
+    Ok(Json(state.database.list_documents(query.parent_id).await?))
 }
 
 async fn create_document(
@@ -702,14 +1031,12 @@ async fn create_document(
         versions: Vec::new(),
     };
 
-    let mut store = state.store.write().await;
     if let Some(parent_id) = doc.parent_id {
-        if !store.documents.contains_key(&parent_id) {
+        if !state.database.document_exists(parent_id).await? {
             return Err(AppError::BadRequest("parent_id does not exist".to_string()));
         }
     }
-    store.documents.insert(doc.id, doc.clone());
-    store.save(&state.config.data_path).await?;
+    state.database.insert_document(&doc).await?;
     Ok(Json(doc))
 }
 
@@ -719,11 +1046,10 @@ async fn read_document(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Document>, AppError> {
     require_user(&headers, &state).await?;
-    let store = state.store.read().await;
-    let doc = store
-        .documents
-        .get(&id)
-        .cloned()
+    let doc = state
+        .database
+        .get_document(id)
+        .await?
         .ok_or_else(|| AppError::NotFound("document not found".to_string()))?;
     Ok(Json(doc))
 }
@@ -735,11 +1061,12 @@ async fn update_document(
     Json(input): Json<DocumentRequest>,
 ) -> Result<Json<Document>, AppError> {
     let user_id = require_user(&headers, &state).await?;
-    let mut store = state.store.write().await;
-    if !matches!(
-        current_role(user_id, &store),
-        Some(Role::Admin | Role::Editor)
-    ) {
+    let user = state
+        .database
+        .get_user(user_id)
+        .await?
+        .ok_or_else(|| AppError::Unauthorized("user no longer exists".to_string()))?;
+    if !matches!(user.role, Role::Admin | Role::Editor) {
         return Err(AppError::Forbidden("insufficient role".to_string()));
     }
     if let Some(parent_id) = input.parent_id {
@@ -748,20 +1075,23 @@ async fn update_document(
                 "document cannot be its own parent".to_string(),
             ));
         }
-        if !store.documents.contains_key(&parent_id) {
+        if !state.database.document_exists(parent_id).await? {
             return Err(AppError::BadRequest("parent_id does not exist".to_string()));
         }
     }
-    let doc = store
-        .documents
-        .get_mut(&id)
+    let mut doc = state
+        .database
+        .get_document(id)
+        .await?
         .ok_or_else(|| AppError::NotFound("document not found".to_string()))?;
 
     if input.content.is_some() {
-        doc.versions.push(DocumentVersion {
+        let version = DocumentVersion {
             content: doc.content.clone(),
             saved_at: Utc::now(),
-        });
+        };
+        state.database.insert_document_version(id, &version).await?;
+        doc.versions.push(version);
     }
     if let Some(title) = input.title {
         doc.title = require_non_empty(Some(title), "title")?;
@@ -778,7 +1108,7 @@ async fn update_document(
     doc.updated_at = Utc::now();
 
     let updated = doc.clone();
-    store.save(&state.config.data_path).await?;
+    state.database.update_document(&updated).await?;
     Ok(Json(updated))
 }
 
@@ -788,15 +1118,15 @@ async fn delete_document(
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, AppError> {
     let user_id = require_user(&headers, &state).await?;
-    let mut store = state.store.write().await;
-    if !matches!(
-        current_role(user_id, &store),
-        Some(Role::Admin | Role::Editor)
-    ) {
+    let user = state
+        .database
+        .get_user(user_id)
+        .await?
+        .ok_or_else(|| AppError::Unauthorized("user no longer exists".to_string()))?;
+    if !matches!(user.role, Role::Admin | Role::Editor) {
         return Err(AppError::Forbidden("insufficient role".to_string()));
     }
-    delete_document_tree(&mut store.documents, id)?;
-    store.save(&state.config.data_path).await?;
+    state.database.delete_document_tree(id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -806,35 +1136,19 @@ async fn search_documents(
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<Vec<SearchResult>>, AppError> {
     require_user(&headers, &state).await?;
-    let store = state.store.read().await;
-    Ok(Json(search_store(
-        &store,
+    let documents = state.database.all_documents().await?;
+    Ok(Json(search_documents_in_memory(
+        &documents,
         &query.q,
         query.limit.unwrap_or(10),
     )))
 }
 
-fn delete_document_tree(documents: &mut HashMap<Uuid, Document>, id: Uuid) -> Result<(), AppError> {
-    if !documents.contains_key(&id) {
-        return Err(AppError::NotFound("document not found".to_string()));
-    }
-    let child_ids = documents
-        .values()
-        .filter(|doc| doc.parent_id == Some(id))
-        .map(|doc| doc.id)
-        .collect::<Vec<_>>();
-    for child_id in child_ids {
-        delete_document_tree(documents, child_id)?;
-    }
-    documents.remove(&id);
-    Ok(())
-}
-
-fn current_role(user_id: Uuid, store: &Store) -> Option<Role> {
-    store.users.get(&user_id).map(|user| user.role)
-}
-
-fn search_store(store: &Store, query: &str, limit: usize) -> Vec<SearchResult> {
+fn search_documents_in_memory(
+    documents: &[Document],
+    query: &str,
+    limit: usize,
+) -> Vec<SearchResult> {
     let terms = query
         .to_lowercase()
         .split_whitespace()
@@ -845,9 +1159,8 @@ fn search_store(store: &Store, query: &str, limit: usize) -> Vec<SearchResult> {
         return Vec::new();
     }
 
-    let mut results = store
-        .documents
-        .values()
+    let mut results = documents
+        .iter()
         .filter_map(|doc| {
             let title = doc.title.to_lowercase();
             let content = doc.content.to_lowercase();
@@ -1015,16 +1328,21 @@ async fn call_mcp_tool(state: &AppState, params: Value) -> Result<Value, String>
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing query".to_string())?;
             let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize;
-            let store = state.store.read().await;
-            json!(search_store(&store, query, limit))
+            let documents = state
+                .database
+                .all_documents()
+                .await
+                .map_err(|error| format!("{error:?}"))?;
+            json!(search_documents_in_memory(&documents, query, limit))
         }
         "read_document" => {
             let doc_id = parse_uuid_arg(&args, "doc_id")?;
-            let store = state.store.read().await;
             json!(
-                store
-                    .documents
-                    .get(&doc_id)
+                state
+                    .database
+                    .get_document(doc_id)
+                    .await
+                    .map_err(|error| format!("{error:?}"))?
                     .ok_or_else(|| "document not found".to_string())?
             )
         }
@@ -1044,8 +1362,19 @@ async fn call_mcp_tool(state: &AppState, params: Value) -> Result<Value, String>
                 .unwrap_or_default()
                 .to_string();
             let parent_id = optional_uuid_arg(&args, "parent_id")?;
-            let mut store = state.store.write().await;
-            let author_id = system_user(&mut store);
+            if let Some(parent_id) = parent_id {
+                if !state
+                    .database
+                    .document_exists(parent_id)
+                    .await
+                    .map_err(|error| format!("{error:?}"))?
+                {
+                    return Err("parent_id does not exist".to_string());
+                }
+            }
+            let author_id = system_user(&state.database)
+                .await
+                .map_err(|error| format!("{error:?}"))?;
             let now = Utc::now();
             let doc = Document {
                 id: Uuid::new_v4(),
@@ -1058,19 +1387,20 @@ async fn call_mcp_tool(state: &AppState, params: Value) -> Result<Value, String>
                 updated_at: now,
                 versions: Vec::new(),
             };
-            store.documents.insert(doc.id, doc.clone());
-            store
-                .save(&state.config.data_path)
+            state
+                .database
+                .insert_document(&doc)
                 .await
                 .map_err(|error| format!("{error:?}"))?;
             json!(doc)
         }
         "update_document" => {
             let doc_id = parse_uuid_arg(&args, "doc_id")?;
-            let mut store = state.store.write().await;
-            let doc = store
-                .documents
-                .get_mut(&doc_id)
+            let mut doc = state
+                .database
+                .get_document(doc_id)
+                .await
+                .map_err(|error| format!("{error:?}"))?
                 .ok_or_else(|| "document not found".to_string())?;
             if let Some(title) = args.get("title").and_then(Value::as_str) {
                 if title.trim().is_empty() {
@@ -1079,45 +1409,48 @@ async fn call_mcp_tool(state: &AppState, params: Value) -> Result<Value, String>
                 doc.title = title.trim().to_string();
             }
             if let Some(content) = args.get("content").and_then(Value::as_str) {
-                doc.versions.push(DocumentVersion {
+                let version = DocumentVersion {
                     content: doc.content.clone(),
                     saved_at: Utc::now(),
-                });
+                };
+                state
+                    .database
+                    .insert_document_version(doc_id, &version)
+                    .await
+                    .map_err(|error| format!("{error:?}"))?;
+                doc.versions.push(version);
                 doc.content = content.to_string();
             }
             doc.updated_at = Utc::now();
             let updated = doc.clone();
-            store
-                .save(&state.config.data_path)
+            state
+                .database
+                .update_document(&updated)
                 .await
                 .map_err(|error| format!("{error:?}"))?;
             json!(updated)
         }
         "list_documents" => {
             let folder_id = optional_uuid_arg(&args, "folder_id")?;
-            let store = state.store.read().await;
-            let mut docs = store
-                .documents
-                .values()
-                .filter(|doc| doc.parent_id == folder_id)
+            let docs = state
+                .database
+                .list_documents(folder_id)
+                .await
+                .map_err(|error| format!("{error:?}"))?
+                .iter()
                 .map(|doc| document_metadata(doc))
                 .collect::<Vec<_>>();
-            docs.sort_by_key(|doc| {
-                doc.get("title")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_lowercase()
-            });
             json!(docs)
         }
         "get_document_metadata" => {
             let doc_id = parse_uuid_arg(&args, "doc_id")?;
-            let store = state.store.read().await;
-            let doc = store
-                .documents
-                .get(&doc_id)
+            let doc = state
+                .database
+                .get_document(doc_id)
+                .await
+                .map_err(|error| format!("{error:?}"))?
                 .ok_or_else(|| "document not found".to_string())?;
-            document_metadata(doc)
+            document_metadata(&doc)
         }
         _ => return Err(format!("unknown tool: {name}")),
     };
@@ -1162,19 +1495,14 @@ fn optional_uuid_arg(args: &Value, name: &str) -> Result<Option<Uuid>, String> {
         .transpose()
 }
 
-fn system_user(store: &mut Store) -> Uuid {
-    if let Some(user) = store
-        .users
-        .values()
-        .find(|user| user.username == "mcp-system")
-    {
-        return user.id;
+async fn system_user(database: &Database) -> Result<Uuid, AppError> {
+    if let Some(user) = database.find_user_by_username("mcp-system").await? {
+        return Ok(user.id);
     }
     let id = Uuid::new_v4();
     let salt = Uuid::new_v4().to_string();
-    store.users.insert(
-        id,
-        User {
+    database
+        .insert_user(&User {
             id,
             username: "mcp-system".to_string(),
             display_name: "MCP System".to_string(),
@@ -1182,9 +1510,9 @@ fn system_user(store: &mut Store) -> Uuid {
             salt,
             role: Role::Admin,
             created_at: Utc::now(),
-        },
-    );
-    id
+        })
+        .await?;
+    Ok(id)
 }
 
 async fn require_user(headers: &HeaderMap, state: &AppState) -> Result<Uuid, AppError> {

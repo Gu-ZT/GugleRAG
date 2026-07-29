@@ -19,7 +19,7 @@ const error = ref("");
 const form = reactive<SetupPayload>({
   server_host: "0.0.0.0",
   server_port: 8080,
-  database_url: "sqlite://data/guglerag.db",
+  database_url: "sqlite://data/guglerag.db?mode=rwc",
   jwt_secret: crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", ""),
   embedding_provider: "stub",
   embedding_model: "BAAI/bge-m3",
@@ -101,7 +101,7 @@ async function saveSetup() {
       <section v-else-if="activeStep.key === 'database'" class="form-section">
         <label>数据库连接串<input v-model="form.database_url" autocomplete="off" /></label>
         <div class="db-examples">
-          <button type="button" @click="form.database_url = 'sqlite://data/guglerag.db'">SQLite</button>
+          <button type="button" @click="form.database_url = 'sqlite://data/guglerag.db?mode=rwc'">SQLite</button>
           <button type="button" @click="form.database_url = 'mysql://user:password@127.0.0.1:3306/guglerag'">MySQL</button>
           <button type="button" @click="form.database_url = 'postgresql://user:password@127.0.0.1:5432/guglerag'">PostgreSQL</button>
         </div>

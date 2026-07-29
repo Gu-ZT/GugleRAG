@@ -13,7 +13,7 @@ GugleRAG is a self-hosted team knowledge base with Markdown documents, REST APIs
 └── AGENTS.md           # Agent/developer working notes
 ```
 
-The backend currently keeps the MVP document store in `GUGLERAG_DATA` as JSON while the database layer is being initialized. Runtime configuration already accepts SQLite, MySQL, and PostgreSQL `DATABASE_URL` values so the SQLx persistence layer can be wired without changing the setup UX.
+The backend stores users, documents, and document versions through SQLx. Runtime configuration accepts SQLite, MySQL, and PostgreSQL `DATABASE_URL` values.
 
 ## First Run
 
@@ -94,6 +94,6 @@ The Vite dev server proxies `/api`, `/mcp`, and `/health` to `http://127.0.0.1:8
 
 Supported URL prefixes:
 
-- SQLite: `sqlite://data/guglerag.db`
+- SQLite: `sqlite://data/guglerag.db?mode=rwc`
 - MySQL: `mysql://user:password@127.0.0.1:3306/guglerag`
 - PostgreSQL: `postgresql://user:password@127.0.0.1:5432/guglerag`
