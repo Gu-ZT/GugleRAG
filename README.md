@@ -6,11 +6,21 @@ GugleRAG is a self-hosted team knowledge base with Markdown documents, REST APIs
 
 ```text
 .
-├── src/                 # Rust backend MVP
-├── frontend/            # Vue 3 + TypeScript + Vite frontend scaffold
-├── .env.example         # Runtime configuration template
-├── PLAN.md             # Product roadmap
-└── AGENTS.md           # Agent/developer working notes
+├── src/
+│   ├── api/             # REST handlers grouped by responsibility
+│   ├── mcp/             # MCP JSON-RPC endpoint and tools
+│   ├── auth.rs          # JWT, password hashing, and account validation
+│   ├── config.rs        # Runtime/setup configuration
+│   ├── db.rs            # SQLx persistence
+│   ├── domain.rs        # Shared domain models
+│   ├── error.rs         # HTTP-aware application errors
+│   ├── search.rs        # Keyword retrieval and ranking
+│   ├── lib.rs           # Application composition
+│   └── main.rs          # Thin executable entry point
+├── tests/               # Backend integration tests
+├── frontend/            # Vue 3 + TypeScript + Vite frontend
+├── PLAN.md              # Product roadmap
+└── AGENTS.md            # Agent/developer working notes
 ```
 
 The backend stores users, documents, and document versions through SQLx. Runtime configuration accepts SQLite, MySQL, and PostgreSQL `DATABASE_URL` values.
@@ -55,6 +65,14 @@ The backend serves `frontend/dist` as static files and falls back to `frontend/d
 
 ```bash
 cargo run
+```
+
+Backend checks and tests:
+
+```bash
+cargo fmt -- --check
+cargo check
+cargo test
 ```
 
 Useful endpoints:

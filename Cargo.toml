@@ -3,6 +3,10 @@ name = "GugleRAG"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "gugle_rag"
+path = "src/lib.rs"
+
 [dependencies]
 axum = "0.8"
 base64 = "0.22"

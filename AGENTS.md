@@ -13,11 +13,14 @@
 - Do not commit `.env`, local data files, `target/`, `frontend/node_modules/`, or `frontend/dist/`.
 - Frontend development should happen in `frontend/` with Vue 3, TypeScript, and Vite. The Vite proxy expects the backend on `127.0.0.1:8080`.
 - Keep the workspace usable through normal account flows; do not require users to paste bearer tokens manually in the UI.
+- Keep `src/main.rs` as a thin executable entry point. Backend composition belongs in `src/lib.rs`; configuration, persistence, domain models, authentication, REST APIs, MCP, and search belong in their dedicated modules.
+- Put backend tests in the top-level `tests/` directory so they exercise the public library surface instead of being embedded in runtime modules.
 
 ## Verification Commands
 
 - Backend type check: `cargo check`
 - Backend build: `cargo build`
 - Backend formatting: `cargo fmt`
+- Backend tests: `cargo test`
 - Frontend dev server: `cd frontend && npm run dev`
 - Frontend production build: `cd frontend && npm run build`
