@@ -90,6 +90,15 @@ npm run dev
 
 The Vite dev server proxies `/api`, `/mcp`, and `/health` to `http://127.0.0.1:8080`.
 
+The current Vue workspace supports:
+
+- user registration and login
+- token persistence in local storage
+- document list, create, edit, save, delete
+- tag editing
+- keyword search over title, content, and tags
+- edit/preview switching for Markdown text
+
 ## Database URLs
 
 Supported URL prefixes:

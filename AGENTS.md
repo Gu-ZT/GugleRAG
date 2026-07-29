@@ -12,6 +12,7 @@
 - Users, documents, and document versions are persisted through SQLx. Keep query code database-vendor neutral.
 - Do not commit `.env`, local data files, `target/`, `frontend/node_modules/`, or `frontend/dist/`.
 - Frontend development should happen in `frontend/` with Vue 3, TypeScript, and Vite. The Vite proxy expects the backend on `127.0.0.1:8080`.
+- Keep the workspace usable through normal account flows; do not require users to paste bearer tokens manually in the UI.
 
 ## Verification Commands
 

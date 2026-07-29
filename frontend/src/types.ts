@@ -44,5 +44,31 @@ export interface DocumentItem {
   title: string;
   content?: string;
   tags: string[];
+  versions?: Array<{
+    content: string;
+    saved_at: string;
+  }>;
+  created_at?: string;
   updated_at: string;
+}
+
+export interface SearchResult {
+  id: string;
+  title: string;
+  excerpt: string;
+  score: number;
+  updated_at: string;
+}
+
+export interface PublicUser {
+  id: string;
+  username: string;
+  display_name: string;
+  role: "admin" | "editor" | "reader";
+  created_at: string;
+}
+
+export interface AuthResponse {
+  token: string;
+  user: PublicUser;
 }
