@@ -33,6 +33,7 @@ import type {
   KnowledgeBase,
   McpConfig,
   PublicUser,
+  RegistrationStatus,
   Team,
   TeamInvitation,
   TeamMember,
@@ -44,6 +45,7 @@ const activeDoc = ref<DocumentItem | null>(null);
 const token = ref(localStorage.getItem("guglerag.token") ?? "");
 const user = ref<PublicUser | null>(null);
 const authMode = ref<"login" | "register">("login");
+const registrationEnabled = ref(true);
 const editorMode = ref<"edit" | "preview">("edit");
 const sidebarOpen = ref(false);
 const workspaceMenuOpen = ref(false);
@@ -229,8 +231,17 @@ function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
 
+function setAuthMode(mode: "login" | "register") {
+  authMode.value = mode;
+  authError.value = "";
+}
+
 async function authenticate() {
   authError.value = "";
+  if (authMode.value === "register" && !registrationEnabled.value) {
+    authError.value = "注册已关闭，请联系管理员添加";
+    return;
+  }
   const path = authMode.value === "login" ? "/api/auth/login" : "/api/auth/register";
   try {
     const response = await request<AuthResponse>(path, {
@@ -248,6 +259,15 @@ async function authenticate() {
     toast("success", "已进入工作区。");
   } catch (err) {
     authError.value = errorMessage(err, "登录失败");
+  }
+}
+
+async function loadRegistrationStatus() {
+  try {
+    const response = await request<RegistrationStatus>("/api/auth/registration-status");
+    registrationEnabled.value = response.registration_enabled;
+  } catch {
+    registrationEnabled.value = true;
   }
 }
 
@@ -814,6 +834,7 @@ onMounted(() => {
   window.addEventListener("keydown", onKeydown);
   window.addEventListener("click", onWindowClick);
   window.addEventListener("beforeunload", onBeforeUnload);
+  loadRegistrationStatus();
   loadMe();
 });
 
@@ -843,15 +864,32 @@ onUnmounted(() => {
       </div>
       <h1>{{ authMode === "login" ? "欢迎回来" : "创建账号" }}</h1>
       <div class="auth-tabs">
-        <button :class="{ active: authMode === 'login' }" @click="authMode = 'login'">登录</button>
-        <button :class="{ active: authMode === 'register' }" @click="authMode = 'register'">注册</button>
+        <button :class="{ active: authMode === 'login' }" @click="setAuthMode('login')">登录</button>
+        <button :class="{ active: authMode === 'register' }" @click="setAuthMode('register')">注册</button>
       </div>
-      <label>用户名<input v-model="authForm.username" autocomplete="username" @keydown.enter="authenticate" /></label>
-      <label>密码<input v-model="authForm.password" type="password" autocomplete="current-password" @keydown.enter="authenticate" /></label>
-      <label v-if="authMode === 'register'">显示名称<input v-model="authForm.display_name" @keydown.enter="authenticate" /></label>
-      <button class="btn btn-primary" @click="authenticate">{{ authMode === "login" ? "登录" : "注册并登录" }}</button>
+      <p v-if="authMode === 'register' && !registrationEnabled" class="bad">
+        注册已关闭，请联系管理员添加
+      </p>
+      <template v-else>
+        <label>用户名<input v-model="authForm.username" autocomplete="username" @keydown.enter="authenticate" /></label>
+        <label>
+          密码
+          <input
+            v-model="authForm.password"
+            type="password"
+            autocomplete="current-password"
+            @keydown.enter="authenticate"
+          />
+        </label>
+        <label v-if="authMode === 'register'">
+          显示名称<input v-model="authForm.display_name" @keydown.enter="authenticate" />
+        </label>
+        <button class="btn btn-primary" @click="authenticate">
+          {{ authMode === "login" ? "登录" : "注册并登录" }}
+        </button>
+      </template>
       <p v-if="authError" class="bad">{{ authError }}</p>
-      <p v-else class="hint">首个注册的账号将成为管理员。</p>
+      <p v-else-if="authMode === 'login' || registrationEnabled" class="hint">首个注册的账号将成为管理员。</p>
     </section>
   </main>
 

@@ -92,6 +92,7 @@ async fn only_administrators_can_update_configuration_and_restart() {
         "server_port": 9191,
         "database_url": database_url,
         "jwt_secret": "",
+        "registration_enabled": false,
         "embedding_provider": "stub",
         "embedding_model": "none",
         "siliconflow_url": "https://api.siliconflow.cn",
@@ -126,6 +127,7 @@ async fn only_administrators_can_update_configuration_and_restart() {
 
     let env_file = tokio::fs::read_to_string(env_path).await.unwrap();
     assert!(env_file.contains(&format!("JWT_SECRET={jwt_secret}")));
+    assert!(env_file.contains("REGISTRATION_ENABLED=false"));
     assert!(env_file.contains("SERVER_PORT=9191"));
     assert!(env_file.contains("RERANKER_ENABLED=true"));
     assert!(env_file.contains("MCP_PUBLIC_URL=https://kb.example.com"));
@@ -140,6 +142,7 @@ async fn only_administrators_can_update_configuration_and_restart() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(persisted["current"]["server_port"], 9191);
+    assert_eq!(persisted["current"]["registration_enabled"], false);
     assert_eq!(persisted["restart_required"], true);
 
     let (status, _) = json_request(

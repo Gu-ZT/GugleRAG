@@ -5,12 +5,19 @@ use crate::{
 };
 use axum::{Json, extract::State, http::HeaderMap};
 use chrono::Utc;
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 pub(crate) async fn register(
     State(state): State<AppState>,
     Json(input): Json<auth::RegisterRequest>,
 ) -> Result<Json<auth::AuthResponse>, AppError> {
+    let user_count = state.database.user_count().await?;
+    if !state.config.registration_enabled && user_count > 0 {
+        return Err(AppError::Forbidden(
+            "registration is closed; contact an administrator".to_string(),
+        ));
+    }
     auth::validate_username(&input.username)?;
     auth::validate_password(&input.password)?;
     if state
@@ -24,7 +31,7 @@ pub(crate) async fn register(
 
     let id = Uuid::new_v4();
     let salt = Uuid::new_v4().to_string();
-    let role = if state.database.user_count().await? == 0 {
+    let role = if user_count == 0 {
         Role::Admin
     } else {
         Role::Editor
@@ -82,4 +89,13 @@ pub(crate) async fn me(
         .await?
         .ok_or_else(|| AppError::Unauthorized("user no longer exists".to_string()))?;
     Ok(Json(PublicUser::from(&user)))
+}
+
+pub(crate) async fn registration_status(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({
+        "registration_enabled": state.config.registration_enabled
+            || state.database.user_count().await? == 0
+    })))
 }

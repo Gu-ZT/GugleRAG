@@ -40,8 +40,17 @@ pub async fn build_test_router(
     database_url: &str,
     jwt_secret: &str,
 ) -> Result<Router, error::AppError> {
+    build_test_router_with_registration(database_url, jwt_secret, true).await
+}
+
+pub async fn build_test_router_with_registration(
+    database_url: &str,
+    jwt_secret: &str,
+    registration_enabled: bool,
+) -> Result<Router, error::AppError> {
     sqlx::any::install_default_drivers();
-    let config = config::Config::for_test(database_url.to_string(), jwt_secret.to_string());
+    let mut config = config::Config::for_test(database_url.to_string(), jwt_secret.to_string());
+    config.registration_enabled = registration_enabled;
     config::prepare_database_path(&config.database).await;
     let database = db::Database::connect(&config.database.url).await?;
     database.migrate().await?;

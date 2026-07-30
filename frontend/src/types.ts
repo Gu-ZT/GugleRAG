@@ -11,6 +11,7 @@ export interface SetupStatus {
       engine: DatabaseEngine;
       url: string;
     };
+    registration_enabled: boolean;
     mcp_enabled: boolean;
     mcp_auth_required: boolean;
     embedding_provider: string;
@@ -27,6 +28,7 @@ export interface SetupPayload {
   server_port: number;
   database_url: string;
   jwt_secret: string;
+  registration_enabled: boolean;
   embedding_provider: "stub" | "local" | "siliconflow";
   embedding_model: string;
   siliconflow_url: string;
@@ -51,6 +53,7 @@ export interface AdminConfigValues {
   server_host: string;
   server_port: number;
   database_url: string;
+  registration_enabled: boolean;
   embedding_provider: "stub" | "local" | "siliconflow";
   embedding_model: string;
   siliconflow_url: string;
@@ -87,6 +90,26 @@ export interface AdminConfigSaveResponse {
 export interface RestartResponse {
   ok: boolean;
   restarting: boolean;
+}
+
+export interface RegistrationStatus {
+  registration_enabled: boolean;
+}
+
+export interface AdminUser {
+  id: string;
+  username: string;
+  display_name: string;
+  role: "admin" | "editor" | "reader";
+  created_at: string;
+  workspaces: Workspace[];
+}
+
+export interface AdminUserPayload {
+  username: string;
+  display_name?: string;
+  password?: string;
+  role: "admin" | "editor" | "reader";
 }
 
 export interface DocumentItem {

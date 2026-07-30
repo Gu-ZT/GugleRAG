@@ -2,6 +2,17 @@
 
 All notable changes to GugleRAG are documented in this file.
 
+## [Unreleased]
+
+- Added administrator user management for listing users, reviewing their workspaces, and creating, updating, or deleting accounts.
+- Added a public registration switch so deployments can disable self-service signup and require administrators to create users.
+- Added administrator configuration and in-app service restart controls.
+- Added database dialect support, document folders, and ZIP document import.
+- Added cross-workspace knowledge-base search and improved workspace document tree handling.
+- Added website icon support, pnpm package-manager metadata, expanded GitHub Markdown alerts and footnotes, and knowledge-base deletion.
+- Added automatic restart after first-run setup writes `.env`.
+- Added direct GitHub Release download links for generated release artifact and checksum entries.
+
 ## [0.1.0] - 2026-07-30
 
 - Added the Rust and Vue 3 application structure with a step-by-step first-run setup flow.

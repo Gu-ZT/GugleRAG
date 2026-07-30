@@ -24,6 +24,7 @@ const form = reactive<SetupPayload>({
   server_port: 8080,
   database_url: "sqlite://data/guglerag.db?mode=rwc",
   jwt_secret: crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", ""),
+  registration_enabled: true,
   embedding_provider: "stub",
   embedding_model: "BAAI/bge-m3",
   siliconflow_url: "https://api.siliconflow.cn",
@@ -154,6 +155,7 @@ async function saveSetup() {
           <label>监听端口<input v-model.number="form.server_port" type="number" min="1" max="65535" /></label>
         </div>
         <label>JWT 密钥<input v-model="form.jwt_secret" autocomplete="off" /></label>
+        <label class="check"><input v-model="form.registration_enabled" type="checkbox" />允许公开注册</label>
         <p class="hint">首个注册用户会成为管理员。JWT 密钥至少 32 个字符，生产环境不要复用默认值。</p>
       </section>
 

@@ -17,6 +17,7 @@ pub struct Config {
     pub(crate) setup_required: bool,
     pub(crate) database: DatabaseConfig,
     pub(crate) jwt_secret: String,
+    pub(crate) registration_enabled: bool,
     pub(crate) mcp_enabled: bool,
     pub(crate) mcp_auth_required: bool,
     pub(crate) embedding_provider: String,
@@ -86,6 +87,7 @@ impl Config {
             database: DatabaseConfig::from_url(database_url),
             jwt_secret: value("JWT_SECRET")
                 .unwrap_or_else(|| "development-only-change-me-before-production".to_string()),
+            registration_enabled: parse_env_bool(value("REGISTRATION_ENABLED").as_deref(), true),
             mcp_enabled: parse_env_bool(value("MCP_ENABLED").as_deref(), true),
             mcp_auth_required: parse_env_bool(value("MCP_AUTH_REQUIRED").as_deref(), false),
             embedding_provider: value("EMBEDDING_PROVIDER").unwrap_or_else(|| "stub".to_string()),
@@ -110,6 +112,7 @@ impl Config {
             setup_required: false,
             database: DatabaseConfig::from_url(database_url),
             jwt_secret,
+            registration_enabled: true,
             mcp_enabled: true,
             mcp_auth_required: true,
             embedding_provider: "stub".to_string(),
@@ -129,6 +132,7 @@ impl Config {
             && self.port == other.port
             && self.database == other.database
             && self.jwt_secret == other.jwt_secret
+            && self.registration_enabled == other.registration_enabled
             && self.mcp_enabled == other.mcp_enabled
             && self.mcp_auth_required == other.mcp_auth_required
             && self.embedding_provider == other.embedding_provider
@@ -185,6 +189,8 @@ pub struct SetupRequest {
     pub server_port: u16,
     pub database_url: String,
     pub jwt_secret: String,
+    #[serde(default = "default_registration_enabled")]
+    pub registration_enabled: bool,
     pub embedding_provider: String,
     pub embedding_model: String,
     pub siliconflow_url: Option<String>,
@@ -319,6 +325,7 @@ pub fn render_env_file(input: &SetupRequest) -> String {
         format!("SERVER_PORT={}", input.server_port),
         format!("DATABASE_URL={}", env_escape(&input.database_url)),
         format!("JWT_SECRET={}", env_escape(&input.jwt_secret)),
+        format!("REGISTRATION_ENABLED={}", input.registration_enabled),
         format!(
             "EMBEDDING_PROVIDER={}",
             env_escape(&input.embedding_provider)
@@ -339,6 +346,10 @@ pub fn render_env_file(input: &SetupRequest) -> String {
         String::new(),
     ]
     .join("\n")
+}
+
+fn default_registration_enabled() -> bool {
+    true
 }
 
 fn env_escape(value: &str) -> String {

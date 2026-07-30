@@ -291,6 +291,27 @@ impl Database {
         row.map(row_to_user).transpose()
     }
 
+    pub(crate) async fn list_users(&self) -> Result<Vec<User>, AppError> {
+        let rows = db_query!(
+            self,
+            "SELECT id, username, display_name, password_hash, salt, role, created_at
+             FROM app_users ORDER BY LOWER(username)",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_user).collect()
+    }
+
+    pub(crate) async fn admin_count(&self) -> Result<i64, AppError> {
+        let row = db_query!(
+            self,
+            "SELECT COUNT(*) AS count FROM app_users WHERE role = 'admin'",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.try_get::<i64, _>("count")?)
+    }
+
     pub(crate) async fn insert_user(&self, user: &User) -> Result<(), AppError> {
         db_query!(
             self,
@@ -308,6 +329,93 @@ impl Database {
         .execute(&self.pool)
         .await?;
         self.ensure_personal_workspace(user.id).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn update_user(&self, user: &User) -> Result<(), AppError> {
+        db_query!(
+            self,
+            "UPDATE app_users
+             SET username = ?, display_name = ?, password_hash = ?, salt = ?, role = ?
+             WHERE id = ?",
+        )
+        .bind(&user.username)
+        .bind(&user.display_name)
+        .bind(&user.password_hash)
+        .bind(&user.salt)
+        .bind(role_to_str(user.role))
+        .bind(user.id.to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn delete_user(&self, user_id: Uuid) -> Result<(), AppError> {
+        if self.get_user(user_id).await?.is_none() {
+            return Err(AppError::NotFound("user not found".to_string()));
+        }
+        let personal_workspace_rows = db_query!(
+            self,
+            "SELECT id FROM workspaces WHERE kind = 'personal' AND owner_id = ?",
+        )
+        .bind(user_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        let mut workspace_ids = personal_workspace_rows
+            .into_iter()
+            .map(|row| parse_uuid_str(row.try_get::<String, _>("id")?))
+            .collect::<Result<Vec<_>, _>>()?;
+        let owned_team_rows = db_query!(
+            self,
+            "SELECT id, workspace_id FROM teams WHERE owner_id = ?",
+        )
+        .bind(user_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        let mut owned_team_ids = Vec::with_capacity(owned_team_rows.len());
+        for row in owned_team_rows {
+            owned_team_ids.push(parse_uuid_str(row.try_get::<String, _>("id")?)?);
+            workspace_ids.push(parse_uuid_str(row.try_get::<String, _>("workspace_id")?)?);
+        }
+        for workspace_id in &workspace_ids {
+            self.delete_workspace_content(*workspace_id).await?;
+        }
+        for team_id in owned_team_ids {
+            db_query!(self, "DELETE FROM team_invitations WHERE team_id = ?")
+                .bind(team_id.to_string())
+                .execute(&self.pool)
+                .await?;
+            db_query!(self, "DELETE FROM team_members WHERE team_id = ?")
+                .bind(team_id.to_string())
+                .execute(&self.pool)
+                .await?;
+            db_query!(self, "DELETE FROM teams WHERE id = ?")
+                .bind(team_id.to_string())
+                .execute(&self.pool)
+                .await?;
+        }
+        for workspace_id in workspace_ids {
+            db_query!(self, "DELETE FROM workspaces WHERE id = ?")
+                .bind(workspace_id.to_string())
+                .execute(&self.pool)
+                .await?;
+        }
+        db_query!(
+            self,
+            "DELETE FROM team_invitations WHERE inviter_id = ? OR invitee_id = ?",
+        )
+        .bind(user_id.to_string())
+        .bind(user_id.to_string())
+        .execute(&self.pool)
+        .await?;
+        db_query!(self, "DELETE FROM team_members WHERE user_id = ?")
+            .bind(user_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        db_query!(self, "DELETE FROM app_users WHERE id = ?")
+            .bind(user_id.to_string())
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -458,6 +566,24 @@ impl Database {
             .bind(id.to_string())
             .execute(&self.pool)
             .await?;
+        Ok(())
+    }
+
+    async fn delete_workspace_content(&self, workspace_id: Uuid) -> Result<(), AppError> {
+        let rows = db_query!(
+            self,
+            "SELECT id FROM knowledge_bases WHERE workspace_id = ?",
+        )
+        .bind(workspace_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        let knowledge_base_ids = rows
+            .into_iter()
+            .map(|row| parse_uuid_str(row.try_get::<String, _>("id")?))
+            .collect::<Result<Vec<_>, _>>()?;
+        for knowledge_base_id in knowledge_base_ids {
+            self.delete_knowledge_base(knowledge_base_id).await?;
+        }
         Ok(())
     }
 

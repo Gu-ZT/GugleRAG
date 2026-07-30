@@ -9,7 +9,7 @@ use crate::AppState;
 use axum::{
     Router,
     extract::DefaultBodyLimit,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
 };
 
 pub(crate) fn router() -> Router<AppState> {
@@ -22,7 +22,19 @@ pub(crate) fn router() -> Router<AppState> {
             get(admin::get_config).put(admin::save_config),
         )
         .route("/api/admin/restart", post(admin::restart))
+        .route(
+            "/api/admin/users",
+            get(admin::list_users).post(admin::create_user),
+        )
+        .route(
+            "/api/admin/users/{user_id}",
+            put(admin::update_user).delete(admin::delete_user),
+        )
         .route("/api/auth/register", post(auth::register))
+        .route(
+            "/api/auth/registration-status",
+            get(auth::registration_status),
+        )
         .route("/api/auth/login", post(auth::login))
         .route("/api/me", get(auth::me))
         .route("/api/workspaces", get(collaboration::list_workspaces))

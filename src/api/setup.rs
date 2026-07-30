@@ -21,6 +21,7 @@ pub(crate) async fn health(State(state): State<AppState>) -> Json<Value> {
             "url": state.config.database.redacted_url()
         },
         "mcp_enabled": state.config.mcp_enabled,
+        "registration_enabled": state.config.registration_enabled,
         "embedding": {
             "provider": state.config.embedding_provider,
             "model": state.config.embedding_model,
@@ -49,6 +50,7 @@ pub(crate) async fn setup_status(State(state): State<AppState>) -> Json<Value> {
             },
             "mcp_enabled": state.config.mcp_enabled,
             "mcp_auth_required": state.config.mcp_auth_required,
+            "registration_enabled": state.config.registration_enabled,
             "embedding_provider": state.config.embedding_provider,
             "embedding_model": state.config.embedding_model,
             "reranker_enabled": state.config.reranker_enabled,

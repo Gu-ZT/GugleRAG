@@ -1,17 +1,19 @@
 use crate::{
     AppState, auth,
     config::{self, Config, SetupRequest},
-    domain::Role,
+    domain::{Role, User, Workspace},
     error::AppError,
 };
 use axum::{
     Json,
-    extract::State,
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
 };
-use serde::Deserialize;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::fs;
+use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct AdminConfigRequest {
@@ -20,6 +22,8 @@ pub(crate) struct AdminConfigRequest {
     database_url: String,
     #[serde(default)]
     jwt_secret: Option<String>,
+    #[serde(default)]
+    registration_enabled: Option<bool>,
     embedding_provider: String,
     embedding_model: String,
     siliconflow_url: String,
@@ -32,6 +36,33 @@ pub(crate) struct AdminConfigRequest {
     mcp_enabled: bool,
     mcp_auth_required: bool,
     mcp_public_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct AdminCreateUserRequest {
+    username: String,
+    password: String,
+    display_name: Option<String>,
+    role: Role,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct AdminUpdateUserRequest {
+    username: String,
+    display_name: Option<String>,
+    #[serde(default)]
+    password: Option<String>,
+    role: Role,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct AdminUserResponse {
+    id: Uuid,
+    username: String,
+    display_name: String,
+    role: Role,
+    created_at: DateTime<Utc>,
+    workspaces: Vec<Workspace>,
 }
 
 pub(crate) async fn get_config(
@@ -58,6 +89,9 @@ pub(crate) async fn save_config(
         server_port: input.server_port,
         database_url: input.database_url,
         jwt_secret,
+        registration_enabled: input
+            .registration_enabled
+            .unwrap_or(current.registration_enabled),
         embedding_provider: input.embedding_provider,
         embedding_model: input.embedding_model,
         siliconflow_url: Some(input.siliconflow_url),
@@ -92,7 +126,107 @@ pub(crate) async fn restart(
     ))
 }
 
-async fn require_admin(headers: &HeaderMap, state: &AppState) -> Result<(), AppError> {
+pub(crate) async fn list_users(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<AdminUserResponse>>, AppError> {
+    require_admin(&headers, &state).await?;
+    Ok(Json(admin_user_list(&state).await?))
+}
+
+pub(crate) async fn create_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<AdminCreateUserRequest>,
+) -> Result<(StatusCode, Json<AdminUserResponse>), AppError> {
+    require_admin(&headers, &state).await?;
+    auth::validate_username(&input.username)?;
+    auth::validate_password(&input.password)?;
+    ensure_username_available(&state, input.username.trim(), None).await?;
+    let username = input.username.trim().to_string();
+    let salt = Uuid::new_v4().to_string();
+    let user = User {
+        id: Uuid::new_v4(),
+        username: username.clone(),
+        display_name: display_name_or_username(input.display_name, &username),
+        password_hash: auth::hash_password(&salt, &input.password),
+        salt,
+        role: input.role,
+        created_at: Utc::now(),
+    };
+    state.database.insert_user(&user).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(admin_user_response(&state, user).await?),
+    ))
+}
+
+pub(crate) async fn update_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(user_id): Path<Uuid>,
+    Json(input): Json<AdminUpdateUserRequest>,
+) -> Result<Json<AdminUserResponse>, AppError> {
+    let admin = require_admin(&headers, &state).await?;
+    auth::validate_username(&input.username)?;
+    ensure_username_available(&state, input.username.trim(), Some(user_id)).await?;
+    let mut user = state
+        .database
+        .get_user(user_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("user not found".to_string()))?;
+    if user.id == admin.id && input.role != Role::Admin {
+        return Err(AppError::Forbidden(
+            "cannot remove administrator role from your own account".to_string(),
+        ));
+    }
+    if user.role == Role::Admin
+        && input.role != Role::Admin
+        && state.database.admin_count().await? <= 1
+    {
+        return Err(AppError::Conflict(
+            "at least one administrator is required".to_string(),
+        ));
+    }
+    let username = input.username.trim().to_string();
+    user.username = username.clone();
+    user.display_name = display_name_or_username(input.display_name, &username);
+    user.role = input.role;
+    if let Some(password) = input.password.filter(|value| !value.is_empty()) {
+        auth::validate_password(&password)?;
+        user.salt = Uuid::new_v4().to_string();
+        user.password_hash = auth::hash_password(&user.salt, &password);
+    }
+    state.database.update_user(&user).await?;
+    Ok(Json(admin_user_response(&state, user).await?))
+}
+
+pub(crate) async fn delete_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(user_id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let admin = require_admin(&headers, &state).await?;
+    if admin.id == user_id {
+        return Err(AppError::Forbidden(
+            "cannot delete your own account".to_string(),
+        ));
+    }
+    let user = state
+        .database
+        .get_user(user_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("user not found".to_string()))?;
+    if user.role == Role::Admin && state.database.admin_count().await? <= 1 {
+        return Err(AppError::Conflict(
+            "at least one administrator is required".to_string(),
+        ));
+    }
+    state.database.delete_user(user_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn require_admin(headers: &HeaderMap, state: &AppState) -> Result<User, AppError> {
     let user_id = auth::require_user(headers, state).await?;
     let user = state
         .database
@@ -104,7 +238,7 @@ async fn require_admin(headers: &HeaderMap, state: &AppState) -> Result<(), AppE
             "administrator access required".to_string(),
         ));
     }
-    Ok(())
+    Ok(user)
 }
 
 fn saved_config(state: &AppState) -> Config {
@@ -133,6 +267,7 @@ fn config_response(state: &AppState, saved: &Config) -> Value {
             "server_host": saved.host,
             "server_port": saved.port,
             "database_url": saved.database.url,
+            "registration_enabled": saved.registration_enabled,
             "embedding_provider": saved.embedding_provider,
             "embedding_model": saved.embedding_model,
             "siliconflow_url": saved.siliconflow_url,
@@ -145,4 +280,48 @@ fn config_response(state: &AppState, saved: &Config) -> Value {
             "mcp_public_url": saved.mcp_public_url
         }
     })
+}
+
+async fn ensure_username_available(
+    state: &AppState,
+    username: &str,
+    existing_user_id: Option<Uuid>,
+) -> Result<(), AppError> {
+    let Some(user) = state.database.find_user_by_username(username).await? else {
+        return Ok(());
+    };
+    if Some(user.id) == existing_user_id {
+        return Ok(());
+    }
+    Err(AppError::Conflict("username already exists".to_string()))
+}
+
+async fn admin_user_list(state: &AppState) -> Result<Vec<AdminUserResponse>, AppError> {
+    let users = state.database.list_users().await?;
+    let mut responses = Vec::with_capacity(users.len());
+    for user in users {
+        responses.push(admin_user_response(state, user).await?);
+    }
+    Ok(responses)
+}
+
+async fn admin_user_response(
+    state: &AppState,
+    user: User,
+) -> Result<AdminUserResponse, AppError> {
+    Ok(AdminUserResponse {
+        id: user.id,
+        username: user.username,
+        display_name: user.display_name,
+        role: user.role,
+        created_at: user.created_at,
+        workspaces: state.database.list_workspaces(user.id).await?,
+    })
+}
+
+fn display_name_or_username(display_name: Option<String>, username: &str) -> String {
+    display_name
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| username.to_string())
 }

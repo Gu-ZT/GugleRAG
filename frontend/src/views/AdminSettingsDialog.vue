@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
-import { Eye, EyeOff, Plug, RefreshCw, Save, Search, Settings, X } from "@lucide/vue";
+import { Eye, EyeOff, Plug, RefreshCw, Save, Search, Settings, UserCog, X } from "@lucide/vue";
 import { request } from "../api/client";
+import AdminUsersPanel from "./AdminUsersPanel.vue";
 import type {
   AdminConfigPayload,
   AdminConfigResponse,
@@ -12,7 +13,7 @@ import type {
 const props = defineProps<{ token: string }>();
 const emit = defineEmits<{ close: [] }>();
 
-type Tab = "service" | "retrieval" | "access";
+type Tab = "service" | "retrieval" | "access" | "users";
 
 const activeTab = ref<Tab>("service");
 const loading = ref(true);
@@ -34,6 +35,7 @@ const form = reactive<AdminConfigPayload>({
   server_port: 8080,
   database_url: "sqlite://data/guglerag.db?mode=rwc",
   jwt_secret: "",
+  registration_enabled: true,
   embedding_provider: "stub",
   embedding_model: "none",
   siliconflow_url: "https://api.siliconflow.cn",
@@ -50,7 +52,8 @@ const form = reactive<AdminConfigPayload>({
 const tabs = [
   { id: "service" as const, label: "服务", icon: Settings },
   { id: "retrieval" as const, label: "检索", icon: Search },
-  { id: "access" as const, label: "接入", icon: Plug }
+  { id: "access" as const, label: "接入", icon: Plug },
+  { id: "users" as const, label: "用户", icon: UserCog }
 ];
 
 const isDirty = computed(() => initialFingerprint.value !== fingerprint());
@@ -204,7 +207,7 @@ onMounted(loadConfig);
             </button>
           </nav>
 
-          <form class="admin-config-form" @submit.prevent="saveConfig">
+          <div class="admin-config-form">
             <section v-if="activeTab === 'service'" class="admin-config-section">
               <div class="field-grid">
                 <label>监听地址<input v-model.trim="form.server_host" autocomplete="off" /></label>
@@ -286,22 +289,33 @@ onMounted(loadConfig);
               </label>
             </section>
 
-            <section v-else class="admin-config-section">
+            <section v-else-if="activeTab === 'access'" class="admin-config-section">
+              <label class="check"><input v-model="form.registration_enabled" type="checkbox" />允许公开注册</label>
               <label class="check"><input v-model="form.mcp_enabled" type="checkbox" />启用 MCP 端点</label>
               <label class="check">
                 <input v-model="form.mcp_auth_required" type="checkbox" />MCP 调用需要 Bearer Token
               </label>
-              <label>MCP 公网地址（可选）<input v-model.trim="form.mcp_public_url" placeholder="https://kb.example.com" /></label>
+              <label>
+                MCP 公网地址（可选）
+                <input v-model.trim="form.mcp_public_url" placeholder="https://kb.example.com" />
+              </label>
               <p class="hint">反向代理或监听地址为通配符时，使用公网地址生成 MCP 配置。</p>
             </section>
 
-            <footer class="admin-actions">
+            <AdminUsersPanel v-else :token="token" />
+
+            <footer v-if="activeTab !== 'users'" class="admin-actions">
               <p v-if="error" class="bad">{{ error }}</p>
               <p v-else-if="notice" class="ok">{{ notice }}</p>
               <p v-else-if="isDirty" class="hint">尚有未保存的修改。</p>
               <p v-else class="hint">保存后再重启以应用配置。</p>
               <div>
-                <button class="btn btn-ghost" type="submit" :disabled="saving || restarting || !isDirty">
+                <button
+                  class="btn btn-ghost"
+                  type="button"
+                  :disabled="saving || restarting || !isDirty"
+                  @click="saveConfig"
+                >
                   <Save :size="16" />{{ saving ? "保存中" : "保存配置" }}
                 </button>
                 <button
@@ -314,7 +328,7 @@ onMounted(loadConfig);
                 </button>
               </div>
             </footer>
-          </form>
+          </div>
 
           <div v-if="restartConfirming" class="restart-confirm" role="alert">
             <p>重启会短暂中断服务。已保存的配置将在服务重新就绪后生效。</p>
