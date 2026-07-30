@@ -155,12 +155,22 @@ function buildTreeRows(documents: DocumentItem[]): TreeRow[] {
         Number(right.is_folder) - Number(left.is_folder) ||
         left.title.localeCompare(right.title, "zh-CN", { sensitivity: "base" })
     );
+  const reachableIds = new Set<string>();
+  const markReachable = (parentId: string | null) => {
+    for (const document of documentsByParent.get(parentId) ?? []) {
+      if (reachableIds.has(document.id)) continue;
+      reachableIds.add(document.id);
+      if (document.is_folder) markReachable(document.id);
+    }
+  };
+  markReachable(null);
+
   const rows: TreeRow[] = [];
-  const visited = new Set<string>();
+  const visibleIds = new Set<string>();
   const visit = (parentId: string | null, depth: number) => {
     for (const document of sortDocuments(documentsByParent.get(parentId) ?? [])) {
-      if (visited.has(document.id)) continue;
-      visited.add(document.id);
+      if (visibleIds.has(document.id)) continue;
+      visibleIds.add(document.id);
       const hasChildren = (documentsByParent.get(document.id) ?? []).length > 0;
       rows.push({ document, depth, hasChildren });
       if (document.is_folder && expandedFolderIds.value.has(document.id)) {
@@ -169,7 +179,7 @@ function buildTreeRows(documents: DocumentItem[]): TreeRow[] {
     }
   };
   visit(null, 0);
-  for (const document of sortDocuments(documents.filter((item) => !visited.has(item.id)))) {
+  for (const document of sortDocuments(documents.filter((item) => !reachableIds.has(item.id)))) {
     rows.push({
       document,
       depth: 0,
