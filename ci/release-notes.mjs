@@ -7,15 +7,22 @@ function argument(name) {
   return process.argv[index + 1];
 }
 
+function optionalArgument(name) {
+  const index = process.argv.indexOf(name);
+  return index >= 0 ? process.argv[index + 1] : undefined;
+}
+
 const version = argument("--version");
 const changelogVersion = argument("--changelog-version");
 const artifacts = argument("--artifacts");
 const output = argument("--output");
+const repository = optionalArgument("--repository") ?? process.env.GITHUB_REPOSITORY;
 const notes = renderReleaseNotes({
   version,
   english: readChangelog("CHANGELOG.md", changelogVersion),
   chinese: readChangelog("CHANGELOG.zh-CN.md", changelogVersion),
-  files: artifactFiles(artifacts)
+  files: artifactFiles(artifacts),
+  repository
 });
 fs.writeFileSync(output, notes);
 console.log(`wrote ${output}`);

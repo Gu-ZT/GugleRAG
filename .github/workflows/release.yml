@@ -234,6 +234,7 @@ jobs:
           --version "${{ needs.prepare.outputs.version }}"
           --changelog-version "${{ needs.prepare.outputs.changelog_version }}"
           --artifacts artifacts
+          --repository "${{ github.repository }}"
           --output release-notes.md
       - name: Publish prepared release
         env:

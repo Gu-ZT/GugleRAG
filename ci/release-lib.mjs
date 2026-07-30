@@ -65,10 +65,24 @@ export function classifyArtifacts(fileNames, version) {
   return rows;
 }
 
-export function renderReleaseNotes({ version, english, chinese, files }) {
+function releaseAssetUrl(repository, version, fileName) {
+  if (!repository) return null;
+  return `https://github.com/${repository}/releases/download/v${version}/${encodeURIComponent(fileName)}`;
+}
+
+function releaseAssetLink(repository, version, fileName) {
+  const url = releaseAssetUrl(repository, version, fileName);
+  return url ? `[${fileName}](${url})` : `\`${fileName}\``;
+}
+
+export function renderReleaseNotes({ version, english, chinese, files, repository }) {
   const rows = classifyArtifacts(files, version);
   const table = rows
-    .map((row) => `| ${row.label} | \`${row.archive}\` | \`${row.checksum}\` |`)
+    .map((row) => {
+      const archive = releaseAssetLink(repository, version, row.archive);
+      const checksum = releaseAssetLink(repository, version, row.checksum);
+      return `| ${row.label} | ${archive} | ${checksum} |`;
+    })
     .join("\n");
   return `# GugleRAG v${version}
 

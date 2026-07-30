@@ -72,7 +72,8 @@ test("renders every supported platform and both languages", () => {
     version: "1.2.0",
     english: "- English change",
     chinese: "- 中文变更",
-    files: files("1.2.0")
+    files: files("1.2.0"),
+    repository: "guglerag/guglerag"
   });
   assert.match(notes, /Linux x64/);
   assert.match(notes, /Linux ARM64/);
@@ -82,4 +83,12 @@ test("renders every supported platform and both languages", () => {
   assert.match(notes, /macOS Intel/);
   assert.match(notes, /English change/);
   assert.match(notes, /中文变更/);
+  assert.match(
+    notes,
+    /\[guglerag-v1\.2\.0-linux-x86_64\.tar\.gz\]\(https:\/\/github\.com\/guglerag\/guglerag\/releases\/download\/v1\.2\.0\/guglerag-v1\.2\.0-linux-x86_64\.tar\.gz\)/
+  );
+  assert.match(
+    notes,
+    /\[guglerag-v1\.2\.0-linux-x86_64\.tar\.gz\.sha256\]\(https:\/\/github\.com\/guglerag\/guglerag\/releases\/download\/v1\.2\.0\/guglerag-v1\.2\.0-linux-x86_64\.tar\.gz\.sha256\)/
+  );
 });
