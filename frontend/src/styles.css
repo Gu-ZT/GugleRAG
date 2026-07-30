@@ -1820,10 +1820,29 @@ label {
   color: #30475d;
 }
 
+.markdown-alert-tip {
+  border-left-color: #3f7f5b;
+  background: #e6f3eb;
+  color: #27533a;
+}
+
+.markdown-alert-important {
+  border-left-color: #7855a6;
+  background: #f0eaf8;
+  color: #523d73;
+}
+
 .markdown-alert-warning {
   border-left-color: #aa7020;
   background: #f8edd5;
   color: #684714;
+}
+
+.markdown-alert-caution,
+.markdown-alert-danger {
+  border-left-color: #b64a4a;
+  background: #f8e5e3;
+  color: #74312e;
 }
 
 .markdown-alert-title {
@@ -1868,6 +1887,29 @@ label {
   border: none;
   border-top: 1px solid var(--line-strong);
   margin: 2em 0;
+}
+
+.markdown .footnotes {
+  margin-top: 2em;
+  color: var(--faint);
+  font-size: 13px;
+}
+
+.markdown .footnotes hr {
+  margin: 0 0 1em;
+}
+
+.markdown .footnotes ol {
+  padding-left: 1.35em;
+}
+
+.markdown .footnote-ref {
+  font-size: 0.78em;
+  line-height: 0;
+}
+
+.markdown .footnote-backref {
+  font-size: 12px;
 }
 
 /* ---------- 空状态 ---------- */
