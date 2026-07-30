@@ -676,18 +676,13 @@ label {
   padding: 18px 18px 14px;
 }
 
-.brand-mark {
+.brand-icon {
   width: 34px;
   height: 34px;
   flex: none;
   border-radius: 9px;
-  background: var(--accent);
-  color: #fff8f3;
-  display: grid;
-  place-items: center;
-  font-family: var(--font-serif);
-  font-size: 19px;
-  font-weight: 700;
+  display: block;
+  object-fit: cover;
 }
 
 .sidebar-brand strong {

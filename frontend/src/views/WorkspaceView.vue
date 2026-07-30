@@ -813,7 +813,7 @@ onUnmounted(() => {
 
     <aside class="sidebar" :class="{ open: sidebarOpen }">
       <div class="sidebar-brand">
-        <span class="brand-mark">G</span>
+        <img class="brand-icon" src="/icon.png" alt="" />
         <div>
           <strong>GugleRAG</strong>
           <small>团队知识库</small>

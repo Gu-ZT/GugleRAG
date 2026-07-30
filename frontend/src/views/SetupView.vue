@@ -67,7 +67,7 @@ async function saveSetup() {
     <aside class="setup-rail">
       <div>
         <div class="sidebar-brand" style="padding:0 0 22px">
-          <span class="brand-mark">G</span>
+          <img class="brand-icon" src="/icon.png" alt="" />
           <div>
             <strong>GugleRAG</strong>
             <small>初始化向导</small>
