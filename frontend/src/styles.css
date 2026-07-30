@@ -824,7 +824,7 @@ label {
   pointer-events: none;
 }
 
-.rail-search .rail-input {
+.rail-search input.rail-input {
   width: 100%;
   padding-left: 32px;
   padding-right: 32px;
@@ -935,8 +935,19 @@ label {
 }
 
 .knowledge-toggle small {
+  flex: none;
+  border-radius: 999px;
+  background: var(--rail-raised);
   color: var(--rail-faint);
+  padding: 1px 7px;
   font-size: 10.5px;
+  font-weight: 600;
+}
+
+.knowledge-row:hover .knowledge-toggle small,
+.knowledge-row.active .knowledge-toggle small {
+  background: var(--rail-line);
+  color: var(--rail-muted);
 }
 
 .knowledge-add-btn {
@@ -964,55 +975,65 @@ label {
 }
 
 .article-list {
-  padding-left: 20px;
+  margin-left: 15px;
+  border-left: 1px solid var(--rail-line);
+  padding-left: 6px;
+  gap: 1px;
 }
 
 .article-item {
-  display: grid;
-  grid-template-columns: 16px minmax(0, 1fr);
-  gap: 2px 7px;
+  display: flex;
   align-items: center;
+  gap: 7px;
   width: 100%;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--rail-muted);
-  padding: 7px 8px;
+  padding: 6px 8px;
   text-align: left;
   cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 
-.article-item:hover,
-.article-item.active {
+.article-item:hover {
   background: var(--rail-raised);
   color: var(--rail-ink);
 }
 
 .article-item.active {
+  background: var(--rail-raised);
+  color: var(--rail-ink);
   box-shadow: inset 2px 0 0 var(--accent-bright);
 }
 
 .article-item svg {
-  grid-row: 1 / span 2;
+  flex: none;
   color: var(--rail-faint);
 }
 
+.article-item.active svg {
+  color: var(--accent-bright);
+}
+
 .article-item span {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 12.5px;
+  font-weight: 500;
 }
 
 .article-item small {
+  flex: none;
   color: var(--rail-faint);
   font-size: 10.5px;
 }
 
 .article-empty {
-  padding: 8px 12px 10px 31px;
+  padding: 6px 12px 8px;
   color: var(--rail-faint);
   font-size: 11.5px;
 }
@@ -1038,11 +1059,9 @@ label {
 }
 
 .tree-summary {
-  border-top: 1px solid var(--rail-line);
-  padding-top: 11px;
   color: var(--rail-faint);
   font-size: 11px;
-  text-align: right;
+  padding-left: 4px;
 }
 
 /* 协作与 MCP 对话框 */
@@ -1460,6 +1479,17 @@ label {
   line-height: 1.75;
   color: var(--ink-soft);
   resize: none;
+  overflow: hidden;
+}
+
+.doc-title-static {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--ink);
+  overflow-wrap: anywhere;
 }
 
 /* Markdown 预览排版 */
@@ -1721,7 +1751,8 @@ label {
     padding-top: 28px;
   }
 
-  .doc-title-input {
+  .doc-title-input,
+  .doc-title-static {
     font-size: 26px;
   }
 

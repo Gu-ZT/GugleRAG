@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import {
   BookOpen,
   ChevronDown,
@@ -106,6 +106,20 @@ const previewHtml = computed(() => renderMarkdown(editor.content));
 const tagChips = computed(() =>
   editor.tags.split(",").map((tag) => tag.trim()).filter(Boolean)
 );
+
+/* 编辑区随内容自动长高，避免页面与输入框双重滚动条 */
+const editorArea = ref<HTMLTextAreaElement | null>(null);
+
+function autogrowEditor() {
+  const el = editorArea.value;
+  if (!el) return;
+  el.style.height = "auto";
+  el.style.height = `${el.scrollHeight}px`;
+}
+
+watch([editorMode, () => activeDoc.value?.id], () => {
+  if (editorMode.value === "edit") nextTick(autogrowEditor);
+});
 
 function authHeaders(): Record<string, string> {
   return token.value ? { Authorization: `Bearer ${token.value}` } : {};
@@ -303,7 +317,7 @@ async function searchDocuments() {
   }
 }
 
-async function openDocument(id: string, knowledgeBaseId?: string) {
+async function openDocument(id: string, knowledgeBaseId?: string, mode: "edit" | "preview" = "preview") {
   try {
     activeDoc.value = await request<DocumentItem>(`/api/documents/${id}`, { headers: authHeaders() });
     const ownerId = knowledgeBaseId ?? activeDoc.value.knowledge_base_id;
@@ -314,7 +328,7 @@ async function openDocument(id: string, knowledgeBaseId?: string) {
     editor.title = activeDoc.value.title;
     editor.content = activeDoc.value.content ?? "";
     editor.tags = activeDoc.value.tags.join(", ");
-    editorMode.value = "edit";
+    editorMode.value = mode;
     sidebarOpen.value = false;
   } catch (err) {
     toast("error", errorMessage(err, "无法打开文档"));
@@ -339,7 +353,7 @@ async function createDocument(knowledgeBaseId = selectedKnowledgeBaseId.value) {
       [knowledgeBaseId]: [created, ...(documentsByKnowledgeBase.value[knowledgeBaseId] ?? [])]
     };
     expandedKnowledgeBaseIds.value = new Set([...expandedKnowledgeBaseIds.value, knowledgeBaseId]);
-    await openDocument(created.id, knowledgeBaseId);
+    await openDocument(created.id, knowledgeBaseId, "edit");
     toast("success", "已创建文档。");
   } catch (err) {
     toast("error", errorMessage(err, "创建文档失败"));
@@ -361,7 +375,7 @@ async function saveDocument() {
       })
     });
     await loadDocuments(knowledgeBaseId);
-    await openDocument(saved.id, knowledgeBaseId);
+    await openDocument(saved.id, knowledgeBaseId, editorMode.value);
     toast("success", "文档已保存。");
   } catch (err) {
     toast("error", errorMessage(err, "保存失败"));
@@ -723,30 +737,46 @@ onUnmounted(() => {
           </nav>
         </div>
         <div v-if="hasActiveDoc" class="topbar-actions">
-          <span class="save-state" :class="{ dirty }">{{ dirty ? "未保存" : "已保存" }}</span>
+          <template v-if="editorMode === 'edit'">
+            <span class="save-state" :class="{ dirty }">{{ dirty ? "未保存" : "已保存" }}</span>
+            <button class="btn btn-primary" :disabled="!dirty" @click="saveDocument">保存</button>
+          </template>
           <div class="seg">
             <button :class="{ active: editorMode === 'edit' }" @click="editorMode = 'edit'">编辑</button>
             <button :class="{ active: editorMode === 'preview' }" @click="editorMode = 'preview'">预览</button>
           </div>
-          <button class="btn btn-primary" :disabled="!dirty" @click="saveDocument">保存</button>
           <button class="btn btn-danger" @click="deleteDocument">删除</button>
         </div>
       </div>
 
       <div v-if="hasActiveDoc" class="editor-scroll">
         <div class="editor-sheet">
-          <input v-model="editor.title" class="doc-title-input" placeholder="未命名文档" />
+          <input v-if="editorMode === 'edit'" v-model="editor.title" class="doc-title-input" placeholder="未命名文档" />
+          <h1 v-else class="doc-title-static">{{ editor.title || "未命名文档" }}</h1>
           <div class="doc-meta-row">
             <span v-if="activeDoc">更新于 {{ formatTime(activeDoc.updated_at) }}</span>
             <span class="dot">·</span>
             <span>{{ activeDoc?.versions?.length ?? 0 }} 个历史版本</span>
-            <span class="dot">·</span>
-            <span class="tags-editor">
+            <template v-if="editorMode === 'edit'">
+              <span class="dot">·</span>
+              <span class="tags-editor">
+                <span v-for="tag in tagChips" :key="tag" class="tag-chip">{{ tag }}</span>
+                <input v-model="editor.tags" placeholder="添加标签，逗号分隔" />
+              </span>
+            </template>
+            <template v-else-if="tagChips.length">
+              <span class="dot">·</span>
               <span v-for="tag in tagChips" :key="tag" class="tag-chip">{{ tag }}</span>
-              <input v-model="editor.tags" placeholder="添加标签，逗号分隔" />
-            </span>
+            </template>
           </div>
-          <textarea v-if="editorMode === 'edit'" v-model="editor.content" class="editor-area" placeholder="用 Markdown 记录知识…" />
+          <textarea
+            v-if="editorMode === 'edit'"
+            ref="editorArea"
+            v-model="editor.content"
+            class="editor-area"
+            placeholder="用 Markdown 记录知识…"
+            @input="autogrowEditor"
+          />
           <div v-else class="markdown" v-html="previewHtml" />
         </div>
       </div>
