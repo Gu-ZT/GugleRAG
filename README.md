@@ -159,7 +159,22 @@ Reranking is optional and controlled by:
 
 ## Frontend
 
-Markdown preview uses `markdown-it` with raw HTML disabled, followed by DOMPurify sanitization.
+Markdown preview uses `markdown-it` with raw HTML disabled, followed by DOMPurify sanitization. It supports note/warning containers and read-only GitHub-style task lists:
+
+```markdown
+:::note
+Deployment details belong here.
+:::
+
+:::warning Optional title
+Check the production database before running this command.
+:::
+
+- [ ] Pending task
+- [x] Completed task
+```
+
+Task checkboxes reflect the Markdown source and are intentionally disabled in preview mode.
 
 ```bash
 cd frontend

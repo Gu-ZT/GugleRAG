@@ -14,7 +14,7 @@
 - Frontend development should happen in `frontend/` with Vue 3, TypeScript, and Vite. The Vite proxy expects the backend on `127.0.0.1:8080`.
 - Keep the workspace selector at the top-left. Its adjacent `+` menu owns team creation, member invitation, and team joining; the main sidebar stays focused on collapsible knowledge-base groups and their articles.
 - Use `@lucide/vue` for interface icons instead of adding new inline SVG markup.
-- Keep Markdown preview on `markdown-it` with raw HTML disabled and sanitize rendered output with DOMPurify.
+- Keep Markdown preview on `markdown-it` with raw HTML disabled and sanitize rendered output with DOMPurify. Preserve `:::note`, `:::warning`, and read-only GitHub-style task-list support when changing the renderer.
 - Keep the workspace usable through normal account flows; do not require users to paste bearer tokens manually in the UI.
 - Users have one personal workspace and may belong to multiple team workspaces. Knowledge bases are the document ownership boundary; document and search APIs must enforce knowledge-base access through workspace membership.
 - MCP configs reuse the current login JWT. Workspace-scoped URLs are `/mcp/user/<workspace_id>` and `/mcp/group/<workspace_id>`; `/mcp/all` has no resource ID and covers every workspace available to the user. Do not create separate MCP credentials when copying a config.
