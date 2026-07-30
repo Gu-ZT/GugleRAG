@@ -23,7 +23,7 @@ when they provide the relevant operation, such as diagnostics, formatting, refac
 ## Verification And Runtime Rules
 
 1. Run Rust and frontend verification commands through RustRover MCP or the `workspace-agent-bridge` skill. This includes type checks, formatting, builds, tests, linting, and development servers.
-2. Do not start `cargo`, `npm`, `node`, or other project verification/runtime commands directly from PowerShell or another shell. If the IDE bridge is unavailable for this project, report the blocker instead of falling back to a shell command.
+2. Do not start `cargo`, `pnpm`, `node`, or other project verification/runtime commands directly from PowerShell or another shell. If the IDE bridge is unavailable for this project, report the blocker instead of falling back to a shell command.
 
 ## Current Project Notes
 
@@ -61,7 +61,7 @@ Run the following through RustRover MCP or `workspace-agent-bridge`, never direc
 - Backend formatting: `cargo fmt`
 - Backend tests: `cargo test`
 - Backend lint: `cargo clippy --workspace --all-targets --locked -- -D warnings`
-- Frontend dev server: `cd frontend && npm run dev`
-- Frontend production build: `cd frontend && npm run build`
+- Frontend dev server: `cd frontend && pnpm run dev`
+- Frontend production build: `cd frontend && pnpm run build`
 - Release tooling tests: `node --test ci/tests/*.test.mjs`
 - Release version check: `node ci/check-version.mjs`
