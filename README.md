@@ -126,6 +126,24 @@ Use `scope: "group"` with a `team_id` for one team workspace, or `scope: "all"` 
 
 Scoped MCP tokens are stored hashed in the database. The URL token and Bearer token must match, and access is checked again on every request. Set `MCP_PUBLIC_URL` when the server is behind a public hostname or reverse proxy.
 
+MCP clients can discover resources before operating on documents:
+
+- `list_workspaces()` returns the workspaces visible to the current MCP scope.
+- `list_knowledge_bases(workspace_id)` returns the visible knowledge bases in that workspace.
+
+Every document tool uses an explicit resource context. `search_knowledge`, `read_document`, `create_document`, `update_document`, `list_documents`, and `get_document_metadata` all require both `workspace_id` and `knowledge_base_id`; document-specific tools additionally require their existing `doc_id`, `folder_id`, or content fields. The server verifies that the knowledge base belongs to the workspace, both resources are inside the MCP token scope, and the target document belongs to that knowledge base.
+
+```json
+{
+  "name": "search_knowledge",
+  "arguments": {
+    "workspace_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    "knowledge_base_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    "query": "deployment"
+  }
+}
+```
+
 ## Retrieval Configuration
 
 Embedding is controlled by `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `SILICONFLOW_URL`, and `SILICONFLOW_API_KEY`.
@@ -138,6 +156,8 @@ Reranking is optional and controlled by:
 - `RERANKER_URL=http://...` for custom HTTP reranker services
 
 ## Frontend
+
+Markdown preview uses `markdown-it` with raw HTML disabled, followed by DOMPurify sanitization.
 
 ```bash
 cd frontend

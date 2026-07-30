@@ -99,7 +99,7 @@ async fn collaboration_and_scoped_mcp_flow_works() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let team_kb_id = team_kbs[0]["id"].as_str().unwrap().to_string();
-    let (status, _) = json_request(
+    let (status, team_document) = json_request(
         &app,
         "POST",
         "/api/documents",
@@ -112,6 +112,7 @@ async fn collaboration_and_scoped_mcp_flow_works() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    let team_document_id = team_document["id"].as_str().unwrap().to_string();
 
     let (_, bob_auth) = json_request(
         &app,
@@ -166,6 +167,74 @@ async fn collaboration_and_scoped_mcp_flow_works() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(mcp["type"], "streamable-http");
     let mcp_path = url_path(mcp["url"].as_str().unwrap());
+    let mcp_bearer = mcp["headers"]["Authorization"]
+        .as_str()
+        .unwrap()
+        .trim_start_matches("Bearer ");
+
+    let (_, rpc) = json_request(
+        &app,
+        "POST",
+        &mcp_path,
+        Some(mcp_bearer),
+        Some(json!({ "jsonrpc": "2.0", "id": 0, "method": "tools/list" })),
+    )
+    .await;
+    for tool_name in [
+        "search_knowledge",
+        "read_document",
+        "create_document",
+        "update_document",
+        "list_documents",
+        "get_document_metadata",
+    ] {
+        let tool = rpc["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == tool_name)
+            .unwrap();
+        let required = tool["inputSchema"]["required"].as_array().unwrap();
+        assert!(required.contains(&json!("workspace_id")));
+        assert!(required.contains(&json!("knowledge_base_id")));
+    }
+
+    let (_, rpc) = json_request(
+        &app,
+        "POST",
+        &mcp_path,
+        Some(mcp_bearer),
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": { "name": "list_workspaces", "arguments": {} }
+        })),
+    )
+    .await;
+    let scoped_workspaces = mcp_text_json(&rpc);
+    assert_eq!(scoped_workspaces.as_array().unwrap().len(), 1);
+    assert_eq!(scoped_workspaces[0]["id"], team_workspace_id);
+
+    let (_, rpc) = json_request(
+        &app,
+        "POST",
+        &mcp_path,
+        Some(mcp_bearer),
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "list_knowledge_bases",
+                "arguments": { "workspace_id": team_workspace_id }
+            }
+        })),
+    )
+    .await;
+    let scoped_knowledge_bases = mcp_text_json(&rpc);
+    assert_eq!(scoped_knowledge_bases[0]["id"], team_kb_id);
+
     let (status, rpc) = json_request(
         &app,
         "POST",
@@ -182,7 +251,11 @@ async fn collaboration_and_scoped_mcp_flow_works() {
             "method": "tools/call",
             "params": {
                 "name": "search_knowledge",
-                "arguments": { "query": "collaboration", "knowledge_base_id": team_kb_id }
+                "arguments": {
+                    "workspace_id": team_workspace_id,
+                    "knowledge_base_id": team_kb_id,
+                    "query": "collaboration"
+                }
             }
         })),
     )
@@ -195,7 +268,81 @@ async fn collaboration_and_scoped_mcp_flow_works() {
             .contains("Rust team notes")
     );
 
-    let _ = personal_kb_id;
+    let (_, rpc) = json_request(
+        &app,
+        "POST",
+        &mcp_path,
+        Some(mcp_bearer),
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "read_document",
+                "arguments": {
+                    "workspace_id": team_workspace_id,
+                    "knowledge_base_id": team_kb_id,
+                    "doc_id": team_document_id
+                }
+            }
+        })),
+    )
+    .await;
+    assert_eq!(mcp_text_json(&rpc)["workspace_id"], team_workspace_id);
+
+    let (_, rpc) = json_request(
+        &app,
+        "POST",
+        &mcp_path,
+        Some(mcp_bearer),
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": {
+                "name": "read_document",
+                "arguments": { "doc_id": team_document_id }
+            }
+        })),
+    )
+    .await;
+    assert!(
+        rpc["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("workspace_id")
+    );
+
+    let (_, rpc) = json_request(
+        &app,
+        "POST",
+        &mcp_path,
+        Some(mcp_bearer),
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "tools/call",
+            "params": {
+                "name": "read_document",
+                "arguments": {
+                    "workspace_id": team_workspace_id,
+                    "knowledge_base_id": personal_kb_id,
+                    "doc_id": team_document_id
+                }
+            }
+        })),
+    )
+    .await;
+    assert!(
+        rpc["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("does not belong")
+    );
+}
+
+fn mcp_text_json(response: &Value) -> Value {
+    serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
 }
 
 fn url_path(url: &str) -> String {

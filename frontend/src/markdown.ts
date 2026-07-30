@@ -1,12 +1,12 @@
 import DOMPurify from "dompurify";
-import { marked } from "marked";
+import MarkdownIt from "markdown-it";
+
+const markdown = new MarkdownIt({
+  breaks: true,
+  html: false,
+  linkify: true
+});
 
 export function renderMarkdown(source: string): string {
-  const html = marked.parse(source, {
-    async: false,
-    breaks: true,
-    gfm: true
-  });
-
-  return DOMPurify.sanitize(html);
+  return DOMPurify.sanitize(markdown.render(source));
 }

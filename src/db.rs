@@ -295,6 +295,15 @@ impl Database {
         Ok(workspaces)
     }
 
+    pub(crate) async fn all_workspaces(&self) -> Result<Vec<Workspace>, AppError> {
+        let rows = sqlx::query(
+            "SELECT id, name, kind, owner_id, team_id FROM workspaces ORDER BY LOWER(name)",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_workspace).collect()
+    }
+
     pub(crate) async fn get_workspace(&self, id: Uuid) -> Result<Option<Workspace>, AppError> {
         sqlx::query("SELECT id, name, kind, owner_id, team_id FROM workspaces WHERE id = ?")
             .bind(id.to_string())
@@ -666,18 +675,6 @@ impl Database {
             .fetch_all(&self.pool)
             .await?
         };
-        rows.into_iter()
-            .map(row_to_document_without_versions)
-            .collect()
-    }
-
-    pub(crate) async fn all_documents(&self) -> Result<Vec<Document>, AppError> {
-        let rows = sqlx::query(
-            "SELECT id, knowledge_base_id, title, content, parent_id, tags, author_id, created_at, updated_at
-             FROM documents",
-        )
-        .fetch_all(&self.pool)
-        .await?;
         rows.into_iter()
             .map(row_to_document_without_versions)
             .collect()

@@ -1,7 +1,7 @@
 use crate::{
     AppState,
     auth::{self, hash_access_token, hash_password},
-    domain::{Document, DocumentVersion, KnowledgeBase, Role, User},
+    domain::{Document, DocumentVersion, KnowledgeBase, Role, User, Workspace},
     error::AppError,
     search,
 };
@@ -14,6 +14,11 @@ use axum::{
 use chrono::Utc;
 use serde_json::{Value, json};
 use uuid::Uuid;
+
+struct McpScope {
+    workspaces: Vec<Workspace>,
+    knowledge_bases: Vec<KnowledgeBase>,
+}
 
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
@@ -37,14 +42,14 @@ async fn mcp_endpoint(
         }
         Err(_) => None,
     };
-    let knowledge_bases = match user_id {
-        Some(user_id) => match state.database.accessible_knowledge_bases(user_id).await {
-            Ok(knowledge_bases) => Some(knowledge_bases),
+    let scope = match user_id {
+        Some(user_id) => match mcp_scope_for_user(&state, user_id).await {
+            Ok(scope) => Some(scope),
             Err(error) => return Json(json_rpc_error(id, -32000, &error.to_string())),
         },
         None => None,
     };
-    mcp_response(&state, request, user_id, knowledge_bases.as_deref()).await
+    mcp_response(&state, request, user_id, scope.as_ref()).await
 }
 
 async fn scoped_mcp_endpoint(
@@ -73,24 +78,18 @@ async fn scoped_mcp_endpoint(
         Ok(_) => return Json(json_rpc_error(id, -32001, "invalid MCP token")),
         Err(error) => return Json(json_rpc_error(id, -32000, &error.to_string())),
     };
-    let knowledge_bases = match knowledge_bases_for_token(&state, &token).await {
-        Ok(knowledge_bases) => knowledge_bases,
+    let scope = match mcp_scope_for_token(&state, &token).await {
+        Ok(scope) => scope,
         Err(error) => return Json(json_rpc_error(id, -32001, &error.to_string())),
     };
-    mcp_response(
-        &state,
-        request,
-        Some(token.user_id),
-        Some(knowledge_bases.as_slice()),
-    )
-    .await
+    mcp_response(&state, request, Some(token.user_id), Some(&scope)).await
 }
 
 async fn mcp_response(
     state: &AppState,
     request: Value,
     user_id: Option<Uuid>,
-    knowledge_bases: Option<&[KnowledgeBase]>,
+    scope: Option<&McpScope>,
 ) -> Json<Value> {
     let id = request.get("id").cloned().unwrap_or(Value::Null);
     let method = request
@@ -105,7 +104,7 @@ async fn mcp_response(
             "capabilities": { "tools": {} }
         }),
         "tools/list" => json!({ "tools": mcp_tools() }),
-        "tools/call" => match call_mcp_tool(state, params, user_id, knowledge_bases).await {
+        "tools/call" => match call_mcp_tool(state, params, user_id, scope).await {
             Ok(value) => value,
             Err(error) => return Json(json_rpc_error(id, -32602, &error)),
         },
@@ -114,17 +113,28 @@ async fn mcp_response(
     Json(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
 }
 
-async fn knowledge_bases_for_token(
+async fn mcp_scope_for_user(state: &AppState, user_id: Uuid) -> Result<McpScope, AppError> {
+    state.database.ensure_personal_workspace(user_id).await?;
+    Ok(McpScope {
+        workspaces: state.database.list_workspaces(user_id).await?,
+        knowledge_bases: state.database.accessible_knowledge_bases(user_id).await?,
+    })
+}
+
+async fn mcp_scope_for_token(
     state: &AppState,
     token: &crate::domain::McpToken,
-) -> Result<Vec<KnowledgeBase>, AppError> {
+) -> Result<McpScope, AppError> {
     match token.scope.as_str() {
         "user" => {
             let (workspace, _) = state
                 .database
                 .ensure_personal_workspace(token.user_id)
                 .await?;
-            state.database.list_knowledge_bases(workspace.id).await
+            Ok(McpScope {
+                knowledge_bases: state.database.list_knowledge_bases(workspace.id).await?,
+                workspaces: vec![workspace],
+            })
         }
         "group" => {
             let team_id = token
@@ -145,14 +155,17 @@ async fn knowledge_bases_for_token(
                 .get_team(team_id)
                 .await?
                 .ok_or_else(|| AppError::NotFound("team not found".to_string()))?;
-            state.database.list_knowledge_bases(team.workspace_id).await
-        }
-        "all" => {
-            state
+            let workspace = state
                 .database
-                .accessible_knowledge_bases(token.user_id)
-                .await
+                .get_workspace(team.workspace_id)
+                .await?
+                .ok_or_else(|| AppError::NotFound("team workspace not found".to_string()))?;
+            Ok(McpScope {
+                knowledge_bases: state.database.list_knowledge_bases(workspace.id).await?,
+                workspaces: vec![workspace],
+            })
         }
+        "all" => mcp_scope_for_user(state, token.user_id).await,
         _ => Err(AppError::Unauthorized("unknown MCP scope".to_string())),
     }
 }
@@ -160,24 +173,49 @@ async fn knowledge_bases_for_token(
 fn mcp_tools() -> Value {
     json!([
         {
-            "name": "search_knowledge",
-            "description": "Search the team knowledge base.",
+            "name": "list_workspaces",
+            "description": "List workspaces available in this MCP scope.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        },
+        {
+            "name": "list_knowledge_bases",
+            "description": "List knowledge bases in an available workspace.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
+                    "workspace_id": { "type": "string", "format": "uuid" }
+                },
+                "required": ["workspace_id"]
+            }
+        },
+        {
+            "name": "search_knowledge",
+            "description": "Search documents in one workspace knowledge base.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspace_id": { "type": "string", "format": "uuid" },
+                    "knowledge_base_id": { "type": "string", "format": "uuid" },
                     "query": { "type": "string" },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 50 }
                 },
-                "required": ["query"]
+                "required": ["workspace_id", "knowledge_base_id", "query"]
             }
         },
         {
             "name": "read_document",
-            "description": "Read a document by id.",
+            "description": "Read a document in one workspace knowledge base.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "doc_id": { "type": "string" } },
-                "required": ["doc_id"]
+                "properties": {
+                    "workspace_id": { "type": "string", "format": "uuid" },
+                    "knowledge_base_id": { "type": "string", "format": "uuid" },
+                    "doc_id": { "type": "string", "format": "uuid" }
+                },
+                "required": ["workspace_id", "knowledge_base_id", "doc_id"]
             }
         },
         {
@@ -186,12 +224,13 @@ fn mcp_tools() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
+                    "workspace_id": { "type": "string", "format": "uuid" },
+                    "knowledge_base_id": { "type": "string", "format": "uuid" },
                     "title": { "type": "string" },
                     "content": { "type": "string" },
-                    "parent_id": { "type": "string" },
-                    "knowledge_base_id": { "type": "string" }
+                    "parent_id": { "type": "string", "format": "uuid" }
                 },
-                "required": ["title", "content"]
+                "required": ["workspace_id", "knowledge_base_id", "title", "content"]
             }
         },
         {
@@ -200,11 +239,13 @@ fn mcp_tools() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "doc_id": { "type": "string" },
+                    "workspace_id": { "type": "string", "format": "uuid" },
+                    "knowledge_base_id": { "type": "string", "format": "uuid" },
+                    "doc_id": { "type": "string", "format": "uuid" },
                     "title": { "type": "string" },
                     "content": { "type": "string" }
                 },
-                "required": ["doc_id"]
+                "required": ["workspace_id", "knowledge_base_id", "doc_id"]
             }
         },
         {
@@ -213,9 +254,11 @@ fn mcp_tools() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "folder_id": { "type": "string" },
-                    "knowledge_base_id": { "type": "string" }
-                }
+                    "workspace_id": { "type": "string", "format": "uuid" },
+                    "knowledge_base_id": { "type": "string", "format": "uuid" },
+                    "folder_id": { "type": "string", "format": "uuid" }
+                },
+                "required": ["workspace_id", "knowledge_base_id"]
             }
         },
         {
@@ -223,8 +266,12 @@ fn mcp_tools() -> Value {
             "description": "Get document metadata without full content.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "doc_id": { "type": "string" } },
-                "required": ["doc_id"]
+                "properties": {
+                    "workspace_id": { "type": "string", "format": "uuid" },
+                    "knowledge_base_id": { "type": "string", "format": "uuid" },
+                    "doc_id": { "type": "string", "format": "uuid" }
+                },
+                "required": ["workspace_id", "knowledge_base_id", "doc_id"]
             }
         }
     ])
@@ -234,7 +281,7 @@ async fn call_mcp_tool(
     state: &AppState,
     params: Value,
     user_id: Option<Uuid>,
-    allowed_knowledge_bases: Option<&[KnowledgeBase]>,
+    scope: Option<&McpScope>,
 ) -> Result<Value, String> {
     let name = params
         .get("name")
@@ -245,16 +292,41 @@ async fn call_mcp_tool(
         .cloned()
         .unwrap_or_else(|| json!({}));
     let value = match name {
+        "list_workspaces" => match scope {
+            Some(scope) => json!(scope.workspaces),
+            None => json!(
+                state
+                    .database
+                    .all_workspaces()
+                    .await
+                    .map_err(|e| e.to_string())?
+            ),
+        },
+        "list_knowledge_bases" => {
+            let workspace_id = parse_uuid_arg(&args, "workspace_id")?;
+            json!(knowledge_bases_for_workspace(state, workspace_id, scope).await?)
+        }
         "search_knowledge" => {
+            let (_, knowledge_base_id) = require_document_context(state, &args, scope).await?;
             let query = args
                 .get("query")
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing query".to_string())?;
-            let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize;
-            let documents = documents_for_scope(state, allowed_knowledge_bases).await?;
+            let limit = args
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(10)
+                .clamp(1, 50) as usize;
+            let documents = state
+                .database
+                .all_documents_for_knowledge_base(knowledge_base_id)
+                .await
+                .map_err(|e| e.to_string())?;
             json!(search::search_documents(&documents, query, limit))
         }
         "read_document" => {
+            let (workspace_id, knowledge_base_id) =
+                require_document_context(state, &args, scope).await?;
             let doc_id = parse_uuid_arg(&args, "doc_id")?;
             let doc = state
                 .database
@@ -262,10 +334,12 @@ async fn call_mcp_tool(
                 .await
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| "document not found".to_string())?;
-            require_document_scope(&doc, allowed_knowledge_bases)?;
-            json!(doc)
+            require_document_knowledge_base(&doc, knowledge_base_id)?;
+            document_value(&doc, workspace_id)
         }
         "create_document" => {
+            let (workspace_id, knowledge_base_id) =
+                require_document_context(state, &args, scope).await?;
             let title = args
                 .get("title")
                 .and_then(Value::as_str)
@@ -281,8 +355,6 @@ async fn call_mcp_tool(
                     .await
                     .map_err(|e| e.to_string())?,
             };
-            let knowledge_base_id =
-                resolve_knowledge_base_id(state, &args, author_id, allowed_knowledge_bases).await?;
             let parent_id = optional_uuid_arg(&args, "parent_id")?;
             if let Some(parent_id) = parent_id {
                 let parent = state
@@ -316,9 +388,11 @@ async fn call_mcp_tool(
                 .insert_document(&doc)
                 .await
                 .map_err(|e| e.to_string())?;
-            json!(doc)
+            document_value(&doc, workspace_id)
         }
         "update_document" => {
+            let (workspace_id, knowledge_base_id) =
+                require_document_context(state, &args, scope).await?;
             let doc_id = parse_uuid_arg(&args, "doc_id")?;
             let mut doc = state
                 .database
@@ -326,7 +400,7 @@ async fn call_mcp_tool(
                 .await
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| "document not found".to_string())?;
-            require_document_scope(&doc, allowed_knowledge_bases)?;
+            require_document_knowledge_base(&doc, knowledge_base_id)?;
             if let Some(title) = args.get("title").and_then(Value::as_str) {
                 if title.trim().is_empty() {
                     return Err("title cannot be empty".to_string());
@@ -352,36 +426,35 @@ async fn call_mcp_tool(
                 .update_document(&doc)
                 .await
                 .map_err(|e| e.to_string())?;
-            json!(doc)
+            document_value(&doc, workspace_id)
         }
         "list_documents" => {
+            let (workspace_id, knowledge_base_id) =
+                require_document_context(state, &args, scope).await?;
             let folder_id = optional_uuid_arg(&args, "folder_id")?;
-            let knowledge_base_id = if let Some(folder_id) = folder_id {
+            if let Some(folder_id) = folder_id {
                 let folder = state
                     .database
                     .get_document(folder_id)
                     .await
                     .map_err(|e| e.to_string())?
                     .ok_or_else(|| "folder_id not found".to_string())?;
-                require_document_scope(&folder, allowed_knowledge_bases)?;
-                folder.knowledge_base_id
-            } else {
-                let owner_id = match user_id {
-                    Some(user_id) => user_id,
-                    None => system_user(&state.database)
-                        .await
-                        .map_err(|e| e.to_string())?,
-                };
-                resolve_knowledge_base_id(state, &args, owner_id, allowed_knowledge_bases).await?
-            };
+                require_document_knowledge_base(&folder, knowledge_base_id)?;
+            }
             let docs = state
                 .database
                 .list_documents(folder_id, knowledge_base_id)
                 .await
                 .map_err(|e| e.to_string())?;
-            json!(docs.iter().map(document_metadata).collect::<Vec<_>>())
+            json!(
+                docs.iter()
+                    .map(|doc| document_metadata(doc, workspace_id))
+                    .collect::<Vec<_>>()
+            )
         }
         "get_document_metadata" => {
+            let (workspace_id, knowledge_base_id) =
+                require_document_context(state, &args, scope).await?;
             let doc_id = parse_uuid_arg(&args, "doc_id")?;
             let doc = state
                 .database
@@ -389,90 +462,82 @@ async fn call_mcp_tool(
                 .await
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| "document not found".to_string())?;
-            require_document_scope(&doc, allowed_knowledge_bases)?;
-            document_metadata(&doc)
+            require_document_knowledge_base(&doc, knowledge_base_id)?;
+            document_metadata(&doc, workspace_id)
         }
         _ => return Err(format!("unknown tool: {name}")),
     };
     Ok(json!({ "content": [{ "type": "text", "text": value.to_string() }] }))
 }
 
-async fn documents_for_scope(
+async fn knowledge_bases_for_workspace(
     state: &AppState,
-    allowed_knowledge_bases: Option<&[KnowledgeBase]>,
-) -> Result<Vec<Document>, String> {
-    let Some(knowledge_bases) = allowed_knowledge_bases else {
-        return state
-            .database
-            .all_documents()
-            .await
-            .map_err(|e| e.to_string());
-    };
-    let mut documents = Vec::new();
-    for knowledge_base in knowledge_bases {
-        documents.extend(
-            state
-                .database
-                .all_documents_for_knowledge_base(knowledge_base.id)
-                .await
-                .map_err(|e| e.to_string())?,
-        );
+    workspace_id: Uuid,
+    scope: Option<&McpScope>,
+) -> Result<Vec<KnowledgeBase>, String> {
+    if let Some(scope) = scope {
+        if !scope
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.id == workspace_id)
+        {
+            return Err("workspace_id is outside this MCP scope".to_string());
+        }
+        return Ok(scope
+            .knowledge_bases
+            .iter()
+            .filter(|knowledge_base| knowledge_base.workspace_id == workspace_id)
+            .cloned()
+            .collect());
     }
-    Ok(documents)
+    state
+        .database
+        .get_workspace(workspace_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "workspace_id not found".to_string())?;
+    state
+        .database
+        .list_knowledge_bases(workspace_id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
-fn require_document_scope(
+async fn require_document_context(
+    state: &AppState,
+    args: &Value,
+    scope: Option<&McpScope>,
+) -> Result<(Uuid, Uuid), String> {
+    let workspace_id = parse_uuid_arg(args, "workspace_id")?;
+    let knowledge_base_id = parse_uuid_arg(args, "knowledge_base_id")?;
+    let knowledge_bases = knowledge_bases_for_workspace(state, workspace_id, scope).await?;
+    knowledge_bases
+        .iter()
+        .any(|knowledge_base| knowledge_base.id == knowledge_base_id)
+        .then_some((workspace_id, knowledge_base_id))
+        .ok_or_else(|| "knowledge_base_id does not belong to workspace_id or MCP scope".to_string())
+}
+
+fn require_document_knowledge_base(
     document: &Document,
-    allowed_knowledge_bases: Option<&[KnowledgeBase]>,
+    knowledge_base_id: Uuid,
 ) -> Result<(), String> {
-    if allowed_knowledge_bases.is_some_and(|knowledge_bases| {
-        !knowledge_bases
-            .iter()
-            .any(|knowledge_base| knowledge_base.id == document.knowledge_base_id)
-    }) {
-        return Err("document is outside this MCP scope".to_string());
+    if document.knowledge_base_id != knowledge_base_id {
+        return Err("document does not belong to knowledge_base_id".to_string());
     }
     Ok(())
 }
 
-async fn resolve_knowledge_base_id(
-    state: &AppState,
-    args: &Value,
-    user_id: Uuid,
-    allowed_knowledge_bases: Option<&[KnowledgeBase]>,
-) -> Result<Uuid, String> {
-    let requested = optional_uuid_arg(args, "knowledge_base_id")?;
-    if let Some(knowledge_bases) = allowed_knowledge_bases {
-        if let Some(requested) = requested {
-            return knowledge_bases
-                .iter()
-                .any(|knowledge_base| knowledge_base.id == requested)
-                .then_some(requested)
-                .ok_or_else(|| "knowledge_base_id is outside this MCP scope".to_string());
-        }
-        return match knowledge_bases {
-            [knowledge_base] => Ok(knowledge_base.id),
-            [] => Err("this MCP scope has no knowledge bases".to_string()),
-            _ => Err(
-                "knowledge_base_id is required when the scope has multiple knowledge bases"
-                    .to_string(),
-            ),
-        };
-    }
-    if let Some(requested) = requested {
-        return Ok(requested);
-    }
-    state
-        .database
-        .ensure_personal_workspace(user_id)
-        .await
-        .map(|(_, knowledge_base)| knowledge_base.id)
-        .map_err(|error| error.to_string())
+fn document_value(doc: &Document, workspace_id: Uuid) -> Value {
+    let mut value = json!(doc);
+    value["workspace_id"] = json!(workspace_id);
+    value
 }
 
-fn document_metadata(doc: &Document) -> Value {
+fn document_metadata(doc: &Document, workspace_id: Uuid) -> Value {
     json!({
         "id": doc.id,
+        "workspace_id": workspace_id,
         "knowledge_base_id": doc.knowledge_base_id,
         "title": doc.title,
         "parent_id": doc.parent_id,

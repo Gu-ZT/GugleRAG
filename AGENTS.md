@@ -14,9 +14,11 @@
 - Frontend development should happen in `frontend/` with Vue 3, TypeScript, and Vite. The Vite proxy expects the backend on `127.0.0.1:8080`.
 - Keep the workspace selector at the top-left. Its adjacent `+` menu owns team creation, member invitation, and team joining; the main sidebar stays focused on collapsible knowledge-base groups and their articles.
 - Use `@lucide/vue` for interface icons instead of adding new inline SVG markup.
+- Keep Markdown preview on `markdown-it` with raw HTML disabled and sanitize rendered output with DOMPurify.
 - Keep the workspace usable through normal account flows; do not require users to paste bearer tokens manually in the UI.
 - Users have one personal workspace and may belong to multiple team workspaces. Knowledge bases are the document ownership boundary; document and search APIs must enforce knowledge-base access through workspace membership.
 - Scoped MCP URLs are `/mcp/user/<token>`, `/mcp/group/<token>`, and `/mcp/all/<token>`. Validate both the path token and Bearer token, and keep MCP token values hashed at rest.
+- MCP exposes workspace and knowledge-base discovery tools. Every document/search MCP tool must require and validate both `workspace_id` and `knowledge_base_id` before touching a document.
 - Keep `MCP_PUBLIC_URL` available for deployments where `SERVER_HOST` is a wildcard address or the service is behind a reverse proxy.
 - Keep `src/main.rs` as a thin executable entry point. Backend composition belongs in `src/lib.rs`; configuration, persistence, domain models, authentication, REST APIs, MCP, and search belong in their dedicated modules.
 - Put backend tests in the top-level `tests/` directory so they exercise the public library surface instead of being embedded in runtime modules.

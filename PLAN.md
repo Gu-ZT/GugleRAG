@@ -82,12 +82,13 @@
 
 - [x] 实现 MCP 协议的服务器端点（HTTP 路径 `/mcp`）
 - [x] 暴露至少以下工具（Tools）供 Agent 调用：
-    - `search_knowledge(query, limit)` — 全文/语义混合搜索
-    - `read_document(doc_id)` — 获取文档完整内容
-    - `create_document(title, content, parent_id)` — 新建文档
-    - `update_document(doc_id, content)` — 更新文档
-    - `list_documents(folder_id)` — 列出目录结构
-    - `get_document_metadata(doc_id)` — 获取元数据
+    - `list_workspaces()` / `list_knowledge_bases(workspace_id)` — 发现可访问资源
+    - `search_knowledge(workspace_id, knowledge_base_id, query, limit)` — 全文/语义混合搜索
+    - `read_document(workspace_id, knowledge_base_id, doc_id)` — 获取文档完整内容
+    - `create_document(workspace_id, knowledge_base_id, title, content, parent_id)` — 新建文档
+    - `update_document(workspace_id, knowledge_base_id, doc_id, content)` — 更新文档
+    - `list_documents(workspace_id, knowledge_base_id, folder_id)` — 列出目录结构
+    - `get_document_metadata(workspace_id, knowledge_base_id, doc_id)` — 获取元数据
 - [x] 工具返回结构符合 MCP 规范（JSON-RPC 响应）
 - [x] 支持通过 MCP 进行用户认证（可配置）
 - [x] 支持个人、团队和全部可访问知识库的独立 MCP 配置
@@ -134,10 +135,10 @@
 
 ### Phase 3：MCP 集成（1-2 周）
 
-- [ ] 实现 MCP 协议服务器（HTTP 端点）
-- [ ] 注册核心工具（search/read/create/update/list）
+- [x] 实现 MCP 协议服务器（HTTP 端点）
+- [x] 注册资源发现与文档核心工具（workspace/knowledge-base/search/read/create/update/list）
 - [ ] 测试与 AI Agent（如 Claude Desktop）的联调
-- [ ] 提供 MCP 工具使用文档
+- [x] 提供 MCP 工具使用文档
 
 **交付**：AI Agent 可以通过 MCP 调用知识库所有功能。
 
