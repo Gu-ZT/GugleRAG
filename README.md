@@ -203,3 +203,25 @@ Supported URL prefixes:
 - SQLite: `sqlite://data/guglerag.db?mode=rwc`
 - MySQL: `mysql://user:password@127.0.0.1:3306/guglerag`
 - PostgreSQL: `postgresql://user:password@127.0.0.1:5432/guglerag`
+
+## CI and Releases
+
+GitHub Actions validates the Rust backend, Vue frontend, release tooling, and a real HTTP server on every pull request and push to `main`. The supported release matrix is:
+
+| Platform | Runner | Rust target | Archive |
+| --- | --- | --- | --- |
+| Linux x64 | `ubuntu-22.04` | `x86_64-unknown-linux-gnu` | `.tar.gz` |
+| Windows x64 | `windows-latest` | `x86_64-pc-windows-msvc` | `.zip` |
+| macOS Apple Silicon | `macos-14` | `aarch64-apple-darwin` | `.tar.gz` |
+
+Windows ARM64, Linux ARM64, and macOS x64 are not currently release targets because the repository does not yet have a native runner or verified cross-linking path for them.
+
+Each archive is named `guglerag-v<version>-<platform>-<arch>.<format>` and has a matching `.sha256` file. It contains the server executable, `frontend/dist`, `.env.example`, both changelogs, this README, and `RELEASE-METADATA.json`. These are unsigned portable builds and must be extracted before running.
+
+To publish a release:
+
+1. Keep the version in `Cargo.toml`, `Cargo.lock`, `frontend/package.json`, and `frontend/package-lock.json` synchronized.
+2. Add matching `## [x.y.z]` sections to `CHANGELOG.md` and `CHANGELOG.zh-CN.md`.
+3. Push the exact tag `vx.y.z`.
+
+The release workflow validates all three native targets, creates portable archives and checksums, generates bilingual release notes, and publishes the draft only after every package succeeds. It uses the repository-provided `GITHUB_TOKEN`; no additional secrets or signing credentials are required.

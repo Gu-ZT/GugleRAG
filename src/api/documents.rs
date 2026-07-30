@@ -108,12 +108,13 @@ pub(crate) async fn update_document(
         .await?
         .ok_or_else(|| AppError::NotFound("document not found".to_string()))?;
     collaboration::require_knowledge_base_access(&state, user_id, doc.knowledge_base_id).await?;
-    if let Some(knowledge_base_id) = input.knowledge_base_id {
-        if knowledge_base_id != doc.knowledge_base_id {
-            return Err(AppError::BadRequest(
-                "moving documents between knowledge bases is not supported".to_string(),
-            ));
-        }
+    if input
+        .knowledge_base_id
+        .is_some_and(|knowledge_base_id| knowledge_base_id != doc.knowledge_base_id)
+    {
+        return Err(AppError::BadRequest(
+            "moving documents between knowledge bases is not supported".to_string(),
+        ));
     }
     if let Some(parent_id) = input.parent_id {
         if parent_id == id {

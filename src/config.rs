@@ -31,9 +31,9 @@ impl Config {
             .join(".env");
         let setup_required = !env_path.exists();
         if !setup_required {
-            if let Err(error) = dotenvy::from_path(&env_path) {
+            dotenvy::from_path(&env_path).unwrap_or_else(|error| {
                 warn!("failed to load .env from {}: {error}", env_path.display());
-            }
+            });
         }
 
         let database_url = env::var("DATABASE_URL")
@@ -232,15 +232,17 @@ pub(crate) async fn prepare_database_path(database: &DatabaseConfig) {
         return;
     }
     let path = PathBuf::from(path);
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            if let Err(error) = fs::create_dir_all(parent).await {
-                warn!(
-                    "failed to create sqlite database directory {}: {error}",
-                    parent.display()
-                );
-            }
-        }
+    let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    else {
+        return;
+    };
+    if let Err(error) = fs::create_dir_all(parent).await {
+        warn!(
+            "failed to create sqlite database directory {}: {error}",
+            parent.display()
+        );
     }
 }
 

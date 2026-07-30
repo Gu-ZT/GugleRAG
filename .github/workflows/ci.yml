@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  NODE_VERSION: "24"
+
+jobs:
+  quality:
+    name: Quality (${{ matrix.platform }}-${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            arch: x86_64
+            runner: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+          - platform: windows
+            arch: x86_64
+            runner: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+          - platform: macos
+            arch: aarch64
+            runner: macos-14
+            rust_target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+          targets: ${{ matrix.rust_target }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          key: quality-${{ matrix.platform }}-${{ matrix.arch }}
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Check synchronized versions
+        run: node ci/check-version.mjs
+      - name: Test release tooling
+        run: node --test ci/tests/*.test.mjs
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Lint Rust
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test Rust
+        run: cargo test --workspace --locked
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+      - name: Build backend
+        run: cargo build --workspace --locked --target ${{ matrix.rust_target }}
+
+  integration:
+    name: Server integration (linux-x86_64)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          key: integration-linux-x86_64
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+      - name: Build server
+        run: cargo build --locked
+      - name: Exercise real HTTP server
+        run: node ci/smoke-server.mjs target/debug/GugleRAG
+      - name: Upload server log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-server-log
+          path: ci-output/server.log
+          if-no-files-found: warn

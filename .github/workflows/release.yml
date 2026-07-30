@@ -1,0 +1,187 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  NODE_VERSION: "24"
+
+jobs:
+  validate:
+    uses: ./.github/workflows/ci.yml
+
+  prepare:
+    name: Prepare release
+    needs: validate
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Validate tag, manifests, and changelogs
+        run: node ci/check-version.mjs --tag "${GITHUB_REF_NAME}"
+      - name: Create or reuse draft release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --verify-tag --draft --title "GugleRAG $TAG"
+          fi
+          echo "release_id=$(gh release view "$TAG" --json databaseId --jq .databaseId)" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Package (${{ matrix.platform }}-${{ matrix.arch }})
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            arch: x86_64
+            runner: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+            executable: target/x86_64-unknown-linux-gnu/release/GugleRAG
+            archive: tar.gz
+          - platform: windows
+            arch: x86_64
+            runner: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            executable: target/x86_64-pc-windows-msvc/release/GugleRAG.exe
+            archive: zip
+          - platform: macos
+            arch: aarch64
+            runner: macos-14
+            rust_target: aarch64-apple-darwin
+            executable: target/aarch64-apple-darwin/release/GugleRAG
+            archive: tar.gz
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.platform }}-${{ matrix.arch }}
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+      - name: Build release server
+        run: cargo build --release --locked --target ${{ matrix.rust_target }}
+      - name: Smoke-test release server
+        run: node ci/smoke-server.mjs "${{ matrix.executable }}"
+      - name: Assemble portable package
+        run: >-
+          node ci/assemble-release.mjs
+          --version "${{ needs.prepare.outputs.version }}"
+          --platform "${{ matrix.platform }}"
+          --arch "${{ matrix.arch }}"
+          --binary "${{ matrix.executable }}"
+      - name: Archive package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          root="GugleRAG-v${VERSION}-${PLATFORM}-${ARCH}"
+          archive="guglerag-v${VERSION}-${PLATFORM}-${ARCH}.tar.gz"
+          tar -C release/stage -czf "release/${archive}" "$root"
+          cd release
+          shasum -a 256 "$archive" > "${archive}.sha256"
+      - name: Archive package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          $root = "GugleRAG-v$env:VERSION-$env:PLATFORM-$env:ARCH"
+          $archive = "guglerag-v$env:VERSION-$env:PLATFORM-$env:ARCH.zip"
+          Compress-Archive -LiteralPath "release/stage/$root" -DestinationPath "release/$archive"
+          $hash = (Get-FileHash -Algorithm SHA256 "release/$archive").Hash.ToLowerInvariant()
+          "$hash  $archive" | Set-Content -Encoding ascii "release/$archive.sha256"
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            release/*.zip
+            release/*.tar.gz
+            release/*.sha256
+          if-no-files-found: error
+      - name: Upload files to draft release (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: gh release upload "$TAG" release/*.tar.gz release/*.sha256 --clobber
+      - name: Upload files to draft release (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          $files = Get-ChildItem release -File | ForEach-Object FullName
+          gh release upload $env:TAG $files --clobber
+
+  update-release-notes:
+    name: Publish release notes
+    needs: [prepare, build]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: release-*
+          path: artifacts
+          merge-multiple: true
+      - name: Render bilingual release notes
+        run: >-
+          node ci/release-notes.mjs
+          --version "${{ needs.prepare.outputs.version }}"
+          --artifacts artifacts
+          --output release-notes.md
+      - name: Publish prepared release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: gh release edit "$TAG" --notes-file release-notes.md --draft=false
