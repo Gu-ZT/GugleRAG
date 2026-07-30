@@ -206,7 +206,7 @@ Supported URL prefixes:
 
 ## CI and Releases
 
-GitHub Actions validates the Rust backend, Vue frontend, release tooling, and a real HTTP server on every pull request and push to `main`. The supported release matrix is:
+GitHub Actions validates the Rust backend, Vue frontend, release tooling, and a real HTTP server on every pull request and push to `main`. Pull requests run CI without publishing. A successful `main` build publishes a prerelease after all six native packages succeed. The supported release matrix is:
 
 | Platform | Runner | Rust target | Archive |
 | --- | --- | --- | --- |
@@ -221,10 +221,12 @@ Every target uses a matching native GitHub-hosted runner. CI parses each ELF, PE
 
 Each archive is named `guglerag-v<version>-<platform>-<arch>.<format>` and has a matching `.sha256` file. It contains the server executable, `frontend/dist`, `.env.example`, both changelogs, this README, and `RELEASE-METADATA.json`. These are unsigned portable builds and must be extracted before running.
 
-To publish a release:
+Main-branch prereleases use `v<manifest-version>-dev.<run_number>`, for example `v0.1.0-dev.42`. A rerun keeps the same GitHub run number and reuses the same release instead of creating a duplicate. The release remains a draft while packages are uploading and becomes visible as a prerelease only after every target and the bilingual release notes succeed.
+
+To publish a stable release:
 
 1. Keep the version in `Cargo.toml`, `Cargo.lock`, `frontend/package.json`, and `frontend/package-lock.json` synchronized.
 2. Add matching `## [x.y.z]` sections to `CHANGELOG.md` and `CHANGELOG.zh-CN.md`.
 3. Push the exact tag `vx.y.z`.
 
-The release workflow validates all six native targets, creates portable archives and checksums, generates bilingual release notes, and publishes the draft only after every package succeeds. It uses the repository-provided `GITHUB_TOKEN`; no additional secrets or signing credentials are required.
+The release workflow validates all six native targets, creates portable archives and checksums, generates bilingual release notes, and publishes the draft only after every package succeeds. Stable releases use the exact manifest version; prerelease artifacts append the CI build identifier while reading notes from the matching base-version changelog section. The workflow uses the repository-provided `GITHUB_TOKEN`; no additional secrets or signing credentials are required.

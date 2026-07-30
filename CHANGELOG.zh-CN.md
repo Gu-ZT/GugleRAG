@@ -10,3 +10,4 @@ GugleRAG 的重要变更记录在此文件中。
 - 提供带工作区及知识库发现工具的范围化 MCP 访问。
 - 支持说明、警告和 GitHub 风格任务列表的 Markdown 预览。
 - 为 Linux、Windows、macOS 的 x64 与 ARM64 目标加入架构校验、多平台 CI 和便携发布包流程。
+- 支持主分支自动发布带唯一构建标签的 prerelease，并通过版本标签发布正式版本。

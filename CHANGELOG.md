@@ -10,3 +10,4 @@ All notable changes to GugleRAG are documented in this file.
 - Added scoped MCP access with workspace and knowledge-base discovery tools.
 - Added Markdown preview with notes, warnings, and GitHub-style task lists.
 - Added architecture-verified portable CI and release packaging for Linux, Windows, and macOS on x64 and ARM64.
+- Added automatic main-branch prereleases with idempotent build tags and stable version-tag releases.

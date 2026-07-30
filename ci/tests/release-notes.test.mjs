@@ -4,6 +4,7 @@ import {
   classifyArtifacts,
   extractChangelogSection,
   releaseTargets,
+  resolveReleaseIdentity,
   renderReleaseNotes
 } from "../release-lib.mjs";
 
@@ -22,6 +23,48 @@ test("extracts one exact changelog version", () => {
 test("rejects unknown or missing release artifacts", () => {
   assert.throws(() => classifyArtifacts([...files("1.2.0"), "unknown.bin"], "1.2.0"));
   assert.throws(() => classifyArtifacts(files("1.2.0").slice(1), "1.2.0"));
+});
+
+test("resolves main builds as unique prereleases", () => {
+  assert.deepEqual(
+    resolveReleaseIdentity({
+      version: "1.2.0",
+      refType: "branch",
+      refName: "main",
+      runNumber: "42"
+    }),
+    {
+      tag: "v1.2.0-dev.42",
+      version: "1.2.0-dev.42",
+      changelogVersion: "1.2.0",
+      prerelease: true
+    }
+  );
+});
+
+test("resolves exact version tags as stable releases", () => {
+  assert.deepEqual(
+    resolveReleaseIdentity({
+      version: "1.2.0",
+      refType: "tag",
+      refName: "v1.2.0",
+      runNumber: "42"
+    }),
+    {
+      tag: "v1.2.0",
+      version: "1.2.0",
+      changelogVersion: "1.2.0",
+      prerelease: false
+    }
+  );
+  assert.throws(() =>
+    resolveReleaseIdentity({
+      version: "1.2.0",
+      refType: "tag",
+      refName: "v1.2.1",
+      runNumber: "42"
+    })
+  );
 });
 
 test("renders every supported platform and both languages", () => {

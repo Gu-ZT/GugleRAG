@@ -8,12 +8,13 @@ function argument(name) {
 }
 
 const version = argument("--version");
+const changelogVersion = argument("--changelog-version");
 const artifacts = argument("--artifacts");
 const output = argument("--output");
 const notes = renderReleaseNotes({
   version,
-  english: readChangelog("CHANGELOG.md", version),
-  chinese: readChangelog("CHANGELOG.zh-CN.md", version),
+  english: readChangelog("CHANGELOG.md", changelogVersion),
+  chinese: readChangelog("CHANGELOG.zh-CN.md", changelogVersion),
   files: artifactFiles(artifacts)
 });
 fs.writeFileSync(output, notes);

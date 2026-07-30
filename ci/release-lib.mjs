@@ -10,6 +10,32 @@ export const releaseTargets = [
   { platform: "macos", arch: "x86_64", format: "tar.gz", label: "macOS Intel" }
 ];
 
+export function resolveReleaseIdentity({ version, refType, refName, runNumber }) {
+  if (refType === "tag") {
+    const expectedTag = `v${version}`;
+    if (refName !== expectedTag) {
+      throw new Error(`release tag ${refName} does not match manifest version ${expectedTag}`);
+    }
+    return {
+      tag: refName,
+      version,
+      changelogVersion: version,
+      prerelease: false
+    };
+  }
+
+  if (!/^\d+$/.test(String(runNumber)) || Number(runNumber) < 1) {
+    throw new Error(`invalid GitHub run number: ${runNumber}`);
+  }
+  const prereleaseVersion = `${version}-dev.${runNumber}`;
+  return {
+    tag: `v${prereleaseVersion}`,
+    version: prereleaseVersion,
+    changelogVersion: version,
+    prerelease: true
+  };
+}
+
 export function extractChangelogSection(source, version) {
   const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const heading = new RegExp(`^## \\[${escaped}\\][^\\n]*$`, "m");

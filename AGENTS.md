@@ -25,6 +25,7 @@
 - CI supports Linux x64/ARM64, Windows x64/ARM64, and macOS ARM64/x64 through native GitHub-hosted runners. Keep binary architecture verification and native server smoke tests enabled for every release target.
 - Keep the release version synchronized across `Cargo.toml`, `Cargo.lock`, `frontend/package.json`, and `frontend/package-lock.json`. Both changelogs require a matching `## [x.y.z]` section before tagging `vx.y.z`.
 - Release artifacts are unsigned portable archives containing the executable and `frontend/dist`. Preserve that layout unless static assets become embedded in the executable, and keep generated `ci-output/` and `release/` directories untracked.
+- Successful `main` pushes publish `v<manifest-version>-dev.<run_number>` prereleases after the reusable CI and all package jobs pass. Keep the release draft until every asset and the bilingual notes are ready; exact `v<manifest-version>` tags publish stable releases.
 
 ## Verification Commands
 
