@@ -40,6 +40,48 @@ export interface SetupPayload {
   mcp_public_url: string;
 }
 
+export interface AdminConfigValues {
+  server_host: string;
+  server_port: number;
+  database_url: string;
+  embedding_provider: "stub" | "local" | "siliconflow";
+  embedding_model: string;
+  siliconflow_url: string;
+  reranker_enabled: boolean;
+  reranker_provider: "none" | "local" | "siliconflow" | "custom_http";
+  reranker_model: string;
+  reranker_url: string;
+  mcp_enabled: boolean;
+  mcp_auth_required: boolean;
+  mcp_public_url: string;
+}
+
+export interface AdminConfigResponse {
+  env_path: string;
+  restart_required: boolean;
+  secrets: {
+    jwt_secret_configured: boolean;
+    siliconflow_api_key_configured: boolean;
+  };
+  current: AdminConfigValues;
+}
+
+export interface AdminConfigPayload extends AdminConfigValues {
+  jwt_secret: string;
+  siliconflow_api_key: string;
+}
+
+export interface AdminConfigSaveResponse {
+  ok: boolean;
+  env_path: string;
+  restart_required: boolean;
+}
+
+export interface RestartResponse {
+  ok: boolean;
+  restarting: boolean;
+}
+
 export interface DocumentItem {
   id: string;
   knowledge_base_id: string;

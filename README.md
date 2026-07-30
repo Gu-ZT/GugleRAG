@@ -93,6 +93,8 @@ Useful endpoints:
 - `POST /api/setup`
 - `POST /api/auth/register`
 - `POST /api/auth/login`
+- `GET/PUT /api/admin/config` (administrator only)
+- `POST /api/admin/restart` (administrator only)
 - `GET /api/workspaces`
 - `GET/POST /api/workspaces/{workspace_id}/knowledge-bases`
 - `GET/POST /api/teams`

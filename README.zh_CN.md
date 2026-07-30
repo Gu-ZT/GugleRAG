@@ -93,6 +93,8 @@ cargo test
 - `POST /api/setup`
 - `POST /api/auth/register`
 - `POST /api/auth/login`
+- `GET/PUT /api/admin/config`（仅管理员）
+- `POST /api/admin/restart`（仅管理员）
 - `GET /api/workspaces`
 - `GET/POST /api/workspaces/{workspace_id}/knowledge-bases`
 - `GET/POST /api/teams`

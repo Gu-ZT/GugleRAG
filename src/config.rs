@@ -1,8 +1,13 @@
 use crate::error::AppError;
 use serde::{Deserialize, Serialize};
-use std::{env, path::PathBuf};
+use std::{
+    collections::HashMap,
+    env,
+    path::{Path, PathBuf},
+};
 use tokio::fs;
 use tracing::warn;
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct Config {
@@ -17,6 +22,7 @@ pub struct Config {
     pub(crate) embedding_provider: String,
     pub(crate) embedding_model: String,
     pub(crate) siliconflow_url: String,
+    pub(crate) siliconflow_api_key: String,
     pub(crate) reranker_enabled: bool,
     pub(crate) reranker_provider: String,
     pub(crate) reranker_model: String,
@@ -29,39 +35,70 @@ impl Config {
         let env_path = env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
             .join(".env");
+        Self::load(env_path, true)
+    }
+
+    pub(crate) fn from_file(env_path: &Path) -> Self {
+        Self::load(env_path.to_path_buf(), false)
+    }
+
+    fn load(env_path: PathBuf, include_process_env: bool) -> Self {
         let setup_required = !env_path.exists();
+        let mut file_values = HashMap::new();
         if !setup_required {
-            dotenvy::from_path(&env_path).unwrap_or_else(|error| {
-                warn!("failed to load .env from {}: {error}", env_path.display());
-            });
+            match dotenvy::from_path_iter(&env_path) {
+                Ok(entries) => {
+                    for entry in entries {
+                        match entry {
+                            Ok((name, value)) => {
+                                file_values.insert(name, value);
+                            }
+                            Err(error) => warn!(
+                                "failed to parse .env entry from {}: {error}",
+                                env_path.display()
+                            ),
+                        }
+                    }
+                }
+                Err(error) => {
+                    warn!("failed to load .env from {}: {error}", env_path.display());
+                }
+            }
         }
 
-        let database_url = env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "sqlite://data/guglerag.db?mode=rwc".to_string());
+        let value = |name: &str| {
+            if include_process_env {
+                env::var(name).ok()
+            } else {
+                None
+            }
+            .or_else(|| file_values.get(name).cloned())
+        };
+        let database_url = value("DATABASE_URL")
+            .unwrap_or_else(|| "sqlite://data/guglerag.db?mode=rwc".to_string());
         Self {
-            host: env::var("SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
-            port: env::var("SERVER_PORT")
-                .ok()
+            host: value("SERVER_HOST").unwrap_or_else(|| "0.0.0.0".to_string()),
+            port: value("SERVER_PORT")
                 .and_then(|value| value.parse().ok())
                 .unwrap_or(8080),
             env_path,
             setup_required,
             database: DatabaseConfig::from_url(database_url),
-            jwt_secret: env::var("JWT_SECRET")
-                .unwrap_or_else(|_| "development-only-change-me-before-production".to_string()),
-            mcp_enabled: env_bool("MCP_ENABLED", true),
-            mcp_auth_required: env_bool("MCP_AUTH_REQUIRED", false),
-            embedding_provider: env::var("EMBEDDING_PROVIDER")
-                .unwrap_or_else(|_| "stub".to_string()),
-            embedding_model: env::var("EMBEDDING_MODEL").unwrap_or_else(|_| "none".to_string()),
-            siliconflow_url: env::var("SILICONFLOW_URL")
-                .unwrap_or_else(|_| "https://api.siliconflow.cn".to_string()),
-            reranker_enabled: env_bool("RERANKER_ENABLED", false),
-            reranker_provider: env::var("RERANKER_PROVIDER").unwrap_or_else(|_| "none".to_string()),
-            reranker_model: env::var("RERANKER_MODEL")
-                .unwrap_or_else(|_| "BAAI/bge-reranker-v2-m3".to_string()),
-            reranker_url: env::var("RERANKER_URL").unwrap_or_default(),
-            mcp_public_url: env::var("MCP_PUBLIC_URL").unwrap_or_default(),
+            jwt_secret: value("JWT_SECRET")
+                .unwrap_or_else(|| "development-only-change-me-before-production".to_string()),
+            mcp_enabled: parse_env_bool(value("MCP_ENABLED").as_deref(), true),
+            mcp_auth_required: parse_env_bool(value("MCP_AUTH_REQUIRED").as_deref(), false),
+            embedding_provider: value("EMBEDDING_PROVIDER").unwrap_or_else(|| "stub".to_string()),
+            embedding_model: value("EMBEDDING_MODEL").unwrap_or_else(|| "none".to_string()),
+            siliconflow_url: value("SILICONFLOW_URL")
+                .unwrap_or_else(|| "https://api.siliconflow.cn".to_string()),
+            siliconflow_api_key: value("SILICONFLOW_API_KEY").unwrap_or_default(),
+            reranker_enabled: parse_env_bool(value("RERANKER_ENABLED").as_deref(), false),
+            reranker_provider: value("RERANKER_PROVIDER").unwrap_or_else(|| "none".to_string()),
+            reranker_model: value("RERANKER_MODEL")
+                .unwrap_or_else(|| "BAAI/bge-reranker-v2-m3".to_string()),
+            reranker_url: value("RERANKER_URL").unwrap_or_default(),
+            mcp_public_url: value("MCP_PUBLIC_URL").unwrap_or_default(),
         }
     }
 
@@ -69,7 +106,7 @@ impl Config {
         Self {
             host: "127.0.0.1".to_string(),
             port: 0,
-            env_path: PathBuf::from(".env"),
+            env_path: env::temp_dir().join(format!("guglerag-test-{}.env", Uuid::new_v4())),
             setup_required: false,
             database: DatabaseConfig::from_url(database_url),
             jwt_secret,
@@ -78,12 +115,31 @@ impl Config {
             embedding_provider: "stub".to_string(),
             embedding_model: "none".to_string(),
             siliconflow_url: "https://api.siliconflow.cn".to_string(),
+            siliconflow_api_key: String::new(),
             reranker_enabled: false,
             reranker_provider: "none".to_string(),
             reranker_model: "none".to_string(),
             reranker_url: String::new(),
             mcp_public_url: String::new(),
         }
+    }
+
+    pub(crate) fn same_runtime_settings(&self, other: &Self) -> bool {
+        self.host == other.host
+            && self.port == other.port
+            && self.database == other.database
+            && self.jwt_secret == other.jwt_secret
+            && self.mcp_enabled == other.mcp_enabled
+            && self.mcp_auth_required == other.mcp_auth_required
+            && self.embedding_provider == other.embedding_provider
+            && self.embedding_model == other.embedding_model
+            && self.siliconflow_url == other.siliconflow_url
+            && self.siliconflow_api_key == other.siliconflow_api_key
+            && self.reranker_enabled == other.reranker_enabled
+            && self.reranker_provider == other.reranker_provider
+            && self.reranker_model == other.reranker_model
+            && self.reranker_url == other.reranker_url
+            && self.mcp_public_url == other.mcp_public_url
     }
 }
 
@@ -95,7 +151,7 @@ pub enum DatabaseEngine {
     Postgres,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct DatabaseConfig {
     pub engine: DatabaseEngine,
     pub url: String,
@@ -317,9 +373,8 @@ fn redact_database_url(url: &str) -> String {
     )
 }
 
-pub(crate) fn env_bool(name: &str, default: bool) -> bool {
-    env::var(name)
-        .ok()
-        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
+fn parse_env_bool(value: Option<&str>, default: bool) -> bool {
+    value
+        .map(|value| matches!(value, "1" | "true" | "TRUE" | "yes" | "on"))
         .unwrap_or(default)
 }

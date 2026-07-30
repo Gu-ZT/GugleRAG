@@ -1,3 +1,4 @@
+mod admin;
 mod auth;
 mod collaboration;
 mod documents;
@@ -15,6 +16,11 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/health", get(setup::health))
         .route("/api/setup/status", get(setup::setup_status))
         .route("/api/setup", post(setup::save_setup))
+        .route(
+            "/api/admin/config",
+            get(admin::get_config).put(admin::save_config),
+        )
+        .route("/api/admin/restart", post(admin::restart))
         .route("/api/auth/register", post(auth::register))
         .route("/api/auth/login", post(auth::login))
         .route("/api/me", get(auth::me))

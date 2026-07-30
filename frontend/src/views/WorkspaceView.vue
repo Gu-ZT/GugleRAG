@@ -13,12 +13,14 @@ import {
   Plus,
   Plug,
   Search,
+  Settings,
   UserPlus,
   Users,
   X
 } from "@lucide/vue";
 import { request } from "../api/client";
 import { renderMarkdown } from "../markdown";
+import AdminSettingsDialog from "./AdminSettingsDialog.vue";
 import type {
   AuthResponse,
   DocumentItem,
@@ -39,6 +41,7 @@ const authMode = ref<"login" | "register">("login");
 const editorMode = ref<"edit" | "preview">("edit");
 const sidebarOpen = ref(false);
 const workspaceMenuOpen = ref(false);
+const adminSettingsOpen = ref(false);
 const activeDialog = ref<"create-team" | "invite-member" | "join-team" | "create-knowledge-base" | "mcp" | null>(null);
 const query = ref("");
 const authError = ref("");
@@ -529,6 +532,7 @@ function closeDialog() {
 }
 
 function logout() {
+  adminSettingsOpen.value = false;
   token.value = "";
   user.value = null;
   documentsByKnowledgeBase.value = {};
@@ -548,6 +552,7 @@ function onKeydown(event: KeyboardEvent) {
     sidebarOpen.value = false;
     workspaceMenuOpen.value = false;
     closeDialog();
+    adminSettingsOpen.value = false;
   }
 }
 
@@ -714,6 +719,15 @@ onUnmounted(() => {
         <button class="rail-icon-btn" title="MCP 配置" aria-label="MCP 配置" @click="openDialog('mcp')">
           <Plug :size="17" />
         </button>
+        <button
+          v-if="user.role === 'admin'"
+          class="rail-icon-btn"
+          title="系统设置"
+          aria-label="系统设置"
+          @click="adminSettingsOpen = true"
+        >
+          <Settings :size="17" />
+        </button>
         <button class="rail-icon-btn" title="退出登录" @click="logout">
           <LogOut :size="17" />
         </button>
@@ -867,4 +881,6 @@ onUnmounted(() => {
       </section>
     </div>
   </Teleport>
+
+  <AdminSettingsDialog v-if="adminSettingsOpen" :token="token" @close="adminSettingsOpen = false" />
 </template>

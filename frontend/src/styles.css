@@ -1091,6 +1091,198 @@ label {
   width: min(600px, 100%);
 }
 
+.admin-dialog {
+  width: min(760px, 100%);
+}
+
+.admin-loading {
+  color: var(--muted);
+  padding: 42px 22px;
+  text-align: center;
+}
+
+.admin-content {
+  display: grid;
+  min-height: 0;
+}
+
+.admin-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--ok-soft);
+  color: var(--ok);
+  padding: 12px 22px;
+}
+
+.admin-status.pending {
+  background: #f8edd5;
+  color: #684714;
+}
+
+.admin-status-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.admin-status strong,
+.admin-status small {
+  display: block;
+}
+
+.admin-status strong {
+  font-size: 12.5px;
+}
+
+.admin-status small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+
+.admin-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  padding: 8px 22px 0;
+}
+
+.admin-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  min-height: 38px;
+  padding: 8px;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.admin-tabs button:hover {
+  color: var(--ink-soft);
+}
+
+.admin-tabs button.active {
+  border-bottom-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.admin-config-form {
+  display: grid;
+  min-height: 0;
+}
+
+.admin-config-section {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  min-height: 330px;
+  padding: 22px;
+}
+
+.secret-input {
+  position: relative;
+  display: block;
+}
+
+.secret-input input {
+  padding-right: 42px;
+}
+
+.secret-input button {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.secret-input button:hover {
+  background: var(--panel-sunken);
+  color: var(--ink);
+}
+
+.admin-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  padding: 16px 22px;
+}
+
+.admin-actions > p {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+.admin-actions > div,
+.restart-confirm > div {
+  display: flex;
+  flex: none;
+  gap: 8px;
+}
+
+.admin-restart-btn {
+  border-color: var(--accent) !important;
+  background: var(--accent) !important;
+  color: #fff8f3 !important;
+}
+
+.admin-restart-btn:hover:not(:disabled) {
+  border-color: var(--accent-strong) !important;
+  background: var(--accent-strong) !important;
+}
+
+.restart-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-top: 1px solid #e6c79e;
+  background: #f8edd5;
+  color: #684714;
+  padding: 14px 22px;
+}
+
+.restart-confirm p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.spinning {
+  animation: admin-spin 0.9s linear infinite;
+}
+
+@keyframes admin-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .dialog-header {
   display: flex;
   align-items: flex-start;
@@ -1762,7 +1954,8 @@ label {
   }
 
   .dialog,
-  .dialog-wide {
+  .dialog-wide,
+  .admin-dialog {
     width: 100%;
     max-height: calc(100vh - 24px);
   }
@@ -1771,6 +1964,30 @@ label {
   .dialog-form,
   .mcp-panel {
     padding-inline: 18px;
+  }
+
+  .admin-status,
+  .admin-tabs,
+  .admin-config-section,
+  .admin-actions,
+  .restart-confirm {
+    padding-inline: 18px;
+  }
+
+  .admin-config-section {
+    min-height: 0;
+  }
+
+  .admin-actions,
+  .restart-confirm {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-actions > div,
+  .restart-confirm > div {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
   }
 
   .setup-shell {
