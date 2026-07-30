@@ -1,4 +1,14 @@
+<div align="center">
+
+<img src=".idea/icon.png" width="256" height="256" alt="GugleRAG icon">
+
 # GugleRAG
+
+**A self-hosted team knowledge base for people and AI agents.**
+
+English | [简体中文](README.zh_CN.md)
+
+</div>
 
 GugleRAG is a self-hosted team knowledge base with Markdown documents, REST APIs, and an MCP JSON-RPC endpoint for AI agents.
 
