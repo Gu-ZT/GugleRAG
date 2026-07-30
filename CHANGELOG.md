@@ -2,7 +2,7 @@
 
 All notable changes to GugleRAG are documented in this file.
 
-## [Unreleased]
+## [0.1.1] - 2026-07-31
 
 - Added administrator user management for listing users, reviewing their workspaces, and creating, updating, or deleting accounts.
 - Added a public registration switch so deployments can disable self-service signup and require administrators to create users.
