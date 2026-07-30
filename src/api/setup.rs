@@ -3,7 +3,11 @@ use crate::{
     config::{self, SetupRequest},
     error::AppError,
 };
-use axum::{Json, extract::State};
+use axum::{
+    Json,
+    extract::State,
+    http::StatusCode,
+};
 use serde_json::{Value, json};
 use tokio::fs;
 
@@ -58,7 +62,7 @@ pub(crate) async fn setup_status(State(state): State<AppState>) -> Json<Value> {
 pub(crate) async fn save_setup(
     State(state): State<AppState>,
     Json(input): Json<SetupRequest>,
-) -> Result<Json<Value>, AppError> {
+) -> Result<(StatusCode, Json<Value>), AppError> {
     if !state.config.setup_required {
         return Err(AppError::Conflict(
             ".env already exists; edit it directly and restart the server".to_string(),
@@ -66,9 +70,14 @@ pub(crate) async fn save_setup(
     }
     config::validate_setup(&input)?;
     fs::write(&state.config.env_path, config::render_env_file(&input)).await?;
-    Ok(Json(json!({
-        "ok": true,
-        "env_path": state.config.env_path,
-        "restart_required": true
-    })))
+    state.restart_tx.send_replace(true);
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "ok": true,
+            "env_path": state.config.env_path,
+            "restart_required": true,
+            "restarting": true
+        })),
+    ))
 }

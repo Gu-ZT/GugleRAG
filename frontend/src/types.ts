@@ -40,6 +40,13 @@ export interface SetupPayload {
   mcp_public_url: string;
 }
 
+export interface SetupSaveResponse {
+  ok: boolean;
+  env_path: string;
+  restart_required: boolean;
+  restarting: boolean;
+}
+
 export interface AdminConfigValues {
   server_host: string;
   server_port: number;

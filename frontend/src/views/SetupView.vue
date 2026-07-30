@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from "vue";
 import { request } from "../api/client";
-import type { SetupPayload, SetupStatus } from "../types";
+import type { SetupPayload, SetupSaveResponse, SetupStatus } from "../types";
 
 defineProps<{ status: SetupStatus }>();
 
@@ -14,7 +14,10 @@ const steps = [
 
 const currentStep = ref(0);
 const saved = ref(false);
+const saving = ref(false);
+const restarting = ref(false);
 const error = ref("");
+const notice = ref("");
 
 const form = reactive<SetupPayload>({
   server_host: "0.0.0.0",
@@ -47,17 +50,65 @@ function nextStep() {
   currentStep.value = Math.min(steps.length - 1, currentStep.value + 1);
 }
 
+function delay(milliseconds: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+function configuredBaseUrl(): string {
+  const host = form.server_host.trim();
+  const browserHost = window.location.hostname;
+  const targetHost = host === "" || host === "0.0.0.0" || host === "::" || host === "[::]" ? browserHost : host;
+  const hostname = targetHost.includes(":") && !targetHost.startsWith("[") ? `[${targetHost}]` : targetHost;
+  return `${window.location.protocol}//${hostname}:${form.server_port}`;
+}
+
+async function waitForRestart() {
+  const targetBaseUrl = configuredBaseUrl();
+  const currentBaseUrl = window.location.origin;
+  if (targetBaseUrl !== currentBaseUrl) {
+    await delay(1500);
+    window.location.assign(targetBaseUrl);
+    return;
+  }
+
+  const startedAt = Date.now();
+  const deadline = startedAt + 30_000;
+  let wasUnavailable = false;
+  while (Date.now() < deadline) {
+    await delay(700);
+    try {
+      const response = await fetch("/health", { cache: "no-store" });
+      if (response.ok && (wasUnavailable || Date.now() - startedAt > 2_000)) {
+        window.location.reload();
+        return;
+      }
+    } catch {
+      wasUnavailable = true;
+    }
+  }
+  notice.value = "服务仍在重启。请稍后刷新页面；若修改了地址或端口，请打开新的服务地址。";
+}
+
 async function saveSetup() {
   saved.value = false;
+  saving.value = true;
+  restarting.value = false;
   error.value = "";
+  notice.value = "";
   try {
-    await request("/api/setup", {
+    await request<SetupSaveResponse>("/api/setup", {
       method: "POST",
       body: JSON.stringify(form)
     });
     saved.value = true;
+    restarting.value = true;
+    notice.value = "配置已写入，正在重启服务…";
+    await waitForRestart();
   } catch (err) {
     error.value = err instanceof Error ? err.message : "保存失败";
+  } finally {
+    saving.value = false;
+    restarting.value = false;
   }
 }
 </script>
@@ -152,15 +203,18 @@ async function saveSetup() {
         <label class="check"><input v-model="form.mcp_enabled" type="checkbox" />启用 MCP 端点</label>
         <label class="check"><input v-model="form.mcp_auth_required" type="checkbox" />MCP 调用需要 Bearer Token</label>
         <label>MCP 公网地址（可选）<input v-model="form.mcp_public_url" placeholder="https://kb.example.com" /></label>
-        <p class="hint">公开部署时建议启用 MCP 认证。保存后需要重启后端服务读取 .env。</p>
+        <p class="hint">公开部署时建议启用 MCP 认证。保存后会立即重启服务读取 .env。</p>
       </section>
 
       <div class="form-actions">
-        <button type="button" class="btn btn-ghost" :disabled="currentStep === 0" @click="previousStep">上一步</button>
-        <p v-if="saved" class="ok">.env 已写入，重启后端服务后生效。</p>
+        <button type="button" class="btn btn-ghost" :disabled="currentStep === 0 || saving || restarting" @click="previousStep">上一步</button>
+        <p v-if="notice" class="ok">{{ notice }}</p>
+        <p v-else-if="saved" class="ok">.env 已写入，正在应用配置。</p>
         <p v-else-if="error" class="bad">{{ error }}</p>
         <p v-else class="hint">目标文件：{{ status.env_path }}</p>
-        <button type="submit" class="btn btn-primary">{{ isLastStep ? "保存 .env" : "下一步" }}</button>
+        <button type="submit" class="btn btn-primary" :disabled="saving || restarting">
+          {{ isLastStep ? (restarting ? "重启中" : saving ? "保存中" : "保存 .env") : "下一步" }}
+        </button>
       </div>
     </form>
   </main>
