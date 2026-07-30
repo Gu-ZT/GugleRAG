@@ -34,6 +34,94 @@ fn token(value: &Value) -> &str {
 }
 
 #[tokio::test]
+async fn deleting_a_knowledge_base_removes_its_documents() {
+    let filename = format!("api-delete-kb-{}.db", Uuid::new_v4());
+    let database_url = format!("sqlite://data/{filename}?mode=rwc");
+    let app = gugle_rag::build_test_router(&database_url, "delete-kb-test-secret")
+        .await
+        .unwrap();
+
+    let (_, auth) = json_request(
+        &app,
+        "POST",
+        "/api/auth/register",
+        None,
+        Some(json!({
+            "username": "kb_deleter",
+            "password": "password123",
+            "display_name": "KB Deleter"
+        })),
+    )
+    .await;
+    let auth_token = token(&auth).to_string();
+
+    let (_, workspaces) = json_request(&app, "GET", "/api/workspaces", Some(&auth_token), None).await;
+    let workspace_id = workspaces[0]["id"].as_str().unwrap();
+    let (status, knowledge_base) = json_request(
+        &app,
+        "POST",
+        &format!("/api/workspaces/{workspace_id}/knowledge-bases"),
+        Some(&auth_token),
+        Some(json!({ "name": "Disposable KB", "description": "" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let knowledge_base_id = knowledge_base["id"].as_str().unwrap();
+
+    let (status, document) = json_request(
+        &app,
+        "POST",
+        "/api/documents",
+        Some(&auth_token),
+        Some(json!({
+            "knowledge_base_id": knowledge_base_id,
+            "title": "Temporary document",
+            "content": "Removed with its knowledge base"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let document_id = document["id"].as_str().unwrap();
+
+    let (status, _) = json_request(
+        &app,
+        "DELETE",
+        &format!("/api/knowledge-bases/{knowledge_base_id}"),
+        Some(&auth_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, knowledge_bases) = json_request(
+        &app,
+        "GET",
+        &format!("/api/workspaces/{workspace_id}/knowledge-bases"),
+        Some(&auth_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        knowledge_bases
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["id"] != knowledge_base_id)
+    );
+
+    let (status, _) = json_request(
+        &app,
+        "GET",
+        &format!("/api/documents/{document_id}"),
+        Some(&auth_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn collaboration_and_scoped_mcp_flow_works() {
     let filename = format!("api-collaboration-{}.db", Uuid::new_v4());
     let database_url = format!("sqlite://data/{filename}?mode=rwc");

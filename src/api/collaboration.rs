@@ -1,12 +1,14 @@
 use crate::{
     AppState, auth,
-    domain::{KnowledgeBase, Team, TeamInvitation, TeamMember, TeamRole, Workspace, WorkspaceKind},
+    domain::{
+        KnowledgeBase, Role, Team, TeamInvitation, TeamMember, TeamRole, Workspace, WorkspaceKind,
+    },
     error::AppError,
 };
 use axum::{
     Json,
     extract::{Path, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -104,6 +106,26 @@ pub(crate) async fn create_knowledge_base(
         .insert_knowledge_base(&knowledge_base)
         .await?;
     Ok(Json(knowledge_base))
+}
+
+pub(crate) async fn delete_knowledge_base(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(knowledge_base_id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let user_id = require_editor(&state, &headers).await?;
+    let knowledge_base = require_knowledge_base_access(&state, user_id, knowledge_base_id).await?;
+    let workspace = require_workspace_access(&state, user_id, knowledge_base.workspace_id).await?;
+    if let Some(team_id) = workspace.team_id {
+        let role = state.database.team_member_role(team_id, user_id).await?;
+        if !matches!(role, Some(TeamRole::Owner | TeamRole::Admin)) {
+            return Err(AppError::Forbidden(
+                "only team owners and admins can delete knowledge bases".to_string(),
+            ));
+        }
+    }
+    state.database.delete_knowledge_base(knowledge_base_id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub(crate) async fn list_teams(
@@ -272,6 +294,19 @@ pub(crate) async fn default_knowledge_base(
 ) -> Result<KnowledgeBase, AppError> {
     let (_, knowledge_base) = state.database.ensure_personal_workspace(user_id).await?;
     Ok(knowledge_base)
+}
+
+async fn require_editor(state: &AppState, headers: &HeaderMap) -> Result<Uuid, AppError> {
+    let user_id = auth::require_user(headers, state).await?;
+    let user = state
+        .database
+        .get_user(user_id)
+        .await?
+        .ok_or_else(|| AppError::Unauthorized("user no longer exists".to_string()))?;
+    if !matches!(user.role, Role::Admin | Role::Editor) {
+        return Err(AppError::Forbidden("insufficient role".to_string()));
+    }
+    Ok(user_id)
 }
 
 async fn require_workspace_access(

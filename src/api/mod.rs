@@ -9,7 +9,7 @@ use crate::AppState;
 use axum::{
     Router,
     extract::DefaultBodyLimit,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 
 pub(crate) fn router() -> Router<AppState> {
@@ -48,6 +48,10 @@ pub(crate) fn router() -> Router<AppState> {
             post(collaboration::accept_invitation),
         )
         .route("/api/mcp/configs", post(collaboration::create_mcp_config))
+        .route(
+            "/api/knowledge-bases/{knowledge_base_id}",
+            delete(collaboration::delete_knowledge_base),
+        )
         .route(
             "/api/documents",
             get(documents::list_documents).post(documents::create_document),

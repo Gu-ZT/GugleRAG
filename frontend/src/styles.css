@@ -983,6 +983,11 @@ label {
   color: var(--rail-ink);
 }
 
+.knowledge-action-btn.danger:hover {
+  background: rgba(179, 56, 44, 0.18);
+  color: #f0b2aa;
+}
+
 .article-list {
   margin-left: 15px;
   border-left: 1px solid var(--rail-line);

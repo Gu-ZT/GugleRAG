@@ -639,6 +639,44 @@ async function createKnowledgeBase() {
   }
 }
 
+async function deleteKnowledgeBase(knowledgeBase: KnowledgeBase) {
+  const documentCount = documentsByKnowledgeBase.value[knowledgeBase.id]?.length ?? 0;
+  const detail = documentCount > 0 ? `及其中 ${documentCount} 篇文章或目录` : "";
+  if (!window.confirm(`删除知识库“${knowledgeBase.name}”${detail}？此操作不可撤销。`)) return;
+  try {
+    await request(`/api/knowledge-bases/${knowledgeBase.id}`, {
+      method: "DELETE",
+      headers: authHeaders()
+    });
+    const remaining = knowledgeBases.value.filter((item) => item.id !== knowledgeBase.id);
+    knowledgeBases.value = remaining;
+    const { [knowledgeBase.id]: _removed, ...documents } = documentsByKnowledgeBase.value;
+    documentsByKnowledgeBase.value = documents;
+    expandedKnowledgeBaseIds.value = new Set(
+      [...expandedKnowledgeBaseIds.value].filter((id) => id !== knowledgeBase.id)
+    );
+    const storageKey = `guglerag.knowledge-base.${selectedWorkspaceId.value}`;
+    if (localStorage.getItem(storageKey) === knowledgeBase.id) {
+      localStorage.removeItem(storageKey);
+    }
+    if (activeDoc.value?.knowledge_base_id === knowledgeBase.id) {
+      activeDoc.value = null;
+      editor.title = "";
+      editor.content = "";
+      editor.tags = "";
+    }
+    if (selectedKnowledgeBaseId.value === knowledgeBase.id) {
+      selectedKnowledgeBaseId.value = remaining[0]?.id ?? "";
+      if (selectedKnowledgeBaseId.value) {
+        await selectKnowledgeBase(selectedKnowledgeBaseId.value, true);
+      }
+    }
+    toast("success", "知识库已删除。");
+  } catch (err) {
+    toast("error", errorMessage(err, "删除知识库失败"));
+  }
+}
+
 async function inviteMember() {
   if (!selectedTeam.value || !collaborationForm.inviteUsername.trim()) return;
   try {
@@ -907,6 +945,14 @@ onUnmounted(() => {
                     @click.stop="chooseZipImport(knowledgeBase.id)"
                   >
                     <Upload :size="14" />
+                  </button>
+                  <button
+                    class="knowledge-action-btn danger"
+                    title="删除知识库"
+                    aria-label="删除知识库"
+                    @click.stop="deleteKnowledgeBase(knowledgeBase)"
+                  >
+                    <Trash2 :size="14" />
                   </button>
                 </div>
               </div>

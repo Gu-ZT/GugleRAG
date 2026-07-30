@@ -438,6 +438,29 @@ impl Database {
         Ok(())
     }
 
+    pub(crate) async fn delete_knowledge_base(&self, id: Uuid) -> Result<(), AppError> {
+        if self.get_knowledge_base(id).await?.is_none() {
+            return Err(AppError::NotFound("knowledge base not found".to_string()));
+        }
+        db_query!(
+            self,
+            "DELETE FROM document_versions
+             WHERE document_id IN (SELECT id FROM documents WHERE knowledge_base_id = ?)",
+        )
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+        db_query!(self, "DELETE FROM documents WHERE knowledge_base_id = ?")
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+        db_query!(self, "DELETE FROM knowledge_bases WHERE id = ?")
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub(crate) async fn accessible_knowledge_bases(
         &self,
         user_id: Uuid,
