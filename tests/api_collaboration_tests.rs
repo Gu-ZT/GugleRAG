@@ -77,7 +77,21 @@ async fn collaboration_and_scoped_mcp_flow_works() {
     )
     .await
     .1;
+    let personal_workspace_id = personal_workspace["id"].as_str().unwrap().to_string();
     let personal_kb_id = personal_kb[0]["id"].as_str().unwrap().to_string();
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/documents",
+        Some(&alice_token),
+        Some(json!({
+            "knowledge_base_id": personal_kb_id,
+            "title": "Personal federated notes",
+            "content": "Personal federated search material"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
 
     let (status, team) = json_request(
         &app,
@@ -107,12 +121,35 @@ async fn collaboration_and_scoped_mcp_flow_works() {
         Some(json!({
             "knowledge_base_id": team_kb_id,
             "title": "Rust team notes",
-            "content": "Rust collaboration content"
+            "content": "Rust collaboration content with federated search material"
         })),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     let team_document_id = team_document["id"].as_str().unwrap().to_string();
+    let (status, team_archive) = json_request(
+        &app,
+        "POST",
+        &format!("/api/workspaces/{team_workspace_id}/knowledge-bases"),
+        Some(&alice_token),
+        Some(json!({ "name": "Platform Archive", "description": "" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let team_archive_kb_id = team_archive["id"].as_str().unwrap().to_string();
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/documents",
+        Some(&alice_token),
+        Some(json!({
+            "knowledge_base_id": team_archive_kb_id,
+            "title": "Team archive federated notes",
+            "content": "Team archive federated search material"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
 
     let (_, bob_auth) = json_request(
         &app,
@@ -232,6 +269,138 @@ async fn collaboration_and_scoped_mcp_flow_works() {
             .any(|workspace| workspace["id"] == team_workspace_id)
     );
 
+    let (_, rpc) = json_request(
+        &app,
+        "POST",
+        &all_mcp_path,
+        Some(&alice_token),
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "tools/call",
+            "params": {
+                "name": "search_knowledge",
+                "arguments": {
+                    "workspace_id": [personal_workspace_id.as_str(), team_workspace_id],
+                    "knowledge_base_id": [
+                        personal_kb_id.as_str(),
+                        team_kb_id.as_str(),
+                        team_archive_kb_id.as_str()
+                    ],
+                    "query": "federated"
+                }
+            }
+        })),
+    )
+    .await;
+    let multi_scope_search = mcp_text_json(&rpc);
+    assert_eq!(multi_scope_search.as_array().unwrap().len(), 3);
+    assert!(contains_search_result(
+        &multi_scope_search,
+        "Personal federated notes",
+        &personal_workspace_id,
+        &personal_kb_id,
+    ));
+    assert!(contains_search_result(
+        &multi_scope_search,
+        "Rust team notes",
+        team_workspace_id,
+        &team_kb_id,
+    ));
+    assert!(contains_search_result(
+        &multi_scope_search,
+        "Team archive federated notes",
+        team_workspace_id,
+        &team_archive_kb_id,
+    ));
+
+    let (_, rpc) = json_request(
+        &app,
+        "POST",
+        &all_mcp_path,
+        Some(&alice_token),
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "tools/call",
+            "params": {
+                "name": "search_knowledge",
+                "arguments": {
+                    "workspace_id": team_workspace_id,
+                    "query": "federated"
+                }
+            }
+        })),
+    )
+    .await;
+    let all_team_knowledge_bases_search = mcp_text_json(&rpc);
+    assert_eq!(all_team_knowledge_bases_search.as_array().unwrap().len(), 2);
+    assert!(contains_search_result(
+        &all_team_knowledge_bases_search,
+        "Rust team notes",
+        team_workspace_id,
+        &team_kb_id,
+    ));
+    assert!(contains_search_result(
+        &all_team_knowledge_bases_search,
+        "Team archive federated notes",
+        team_workspace_id,
+        &team_archive_kb_id,
+    ));
+
+    let (_, rpc) = json_request(
+        &app,
+        "POST",
+        &all_mcp_path,
+        Some(&alice_token),
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "tools/call",
+            "params": {
+                "name": "search_knowledge",
+                "arguments": {
+                    "knowledge_base_id": [personal_kb_id.as_str(), team_archive_kb_id.as_str()],
+                    "query": "federated"
+                }
+            }
+        })),
+    )
+    .await;
+    let all_workspace_search = mcp_text_json(&rpc);
+    assert_eq!(all_workspace_search.as_array().unwrap().len(), 2);
+    assert!(contains_search_result(
+        &all_workspace_search,
+        "Personal federated notes",
+        &personal_workspace_id,
+        &personal_kb_id,
+    ));
+    assert!(contains_search_result(
+        &all_workspace_search,
+        "Team archive federated notes",
+        team_workspace_id,
+        &team_archive_kb_id,
+    ));
+
+    let (_, rpc) = json_request(
+        &app,
+        "POST",
+        &all_mcp_path,
+        Some(&alice_token),
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "tools/call",
+            "params": {
+                "name": "search_knowledge",
+                "arguments": { "query": "federated" }
+            }
+        })),
+    )
+    .await;
+    let all_search = mcp_text_json(&rpc);
+    assert_eq!(all_search.as_array().unwrap().len(), 3);
+
     let mcp_path = url_path(mcp["url"].as_str().unwrap());
     let mcp_bearer = mcp["headers"]["Authorization"]
         .as_str()
@@ -246,8 +415,21 @@ async fn collaboration_and_scoped_mcp_flow_works() {
         Some(json!({ "jsonrpc": "2.0", "id": 0, "method": "tools/list" })),
     )
     .await;
+    let search_tool = rpc["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "search_knowledge")
+        .unwrap();
+    assert_eq!(search_tool["inputSchema"]["required"], json!(["query"]));
+    for field in ["workspace_id", "knowledge_base_id"] {
+        let options = search_tool["inputSchema"]["properties"][field]["oneOf"]
+            .as_array()
+            .unwrap();
+        assert_eq!(options[0]["type"], "string");
+        assert_eq!(options[1]["type"], "array");
+    }
     for tool_name in [
-        "search_knowledge",
         "read_document",
         "create_document",
         "update_document",
@@ -299,7 +481,13 @@ async fn collaboration_and_scoped_mcp_flow_works() {
     )
     .await;
     let scoped_knowledge_bases = mcp_text_json(&rpc);
-    assert_eq!(scoped_knowledge_bases[0]["id"], team_kb_id);
+    assert!(
+        scoped_knowledge_bases
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|knowledge_base| knowledge_base["id"] == team_kb_id)
+    );
 
     let (status, rpc) = json_request(
         &app,
@@ -332,6 +520,63 @@ async fn collaboration_and_scoped_mcp_flow_works() {
             .as_str()
             .unwrap()
             .contains("Rust team notes")
+    );
+
+    let (_, rpc) = json_request(
+        &app,
+        "POST",
+        &mcp_path,
+        Some(mcp_bearer),
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 12,
+            "method": "tools/call",
+            "params": {
+                "name": "search_knowledge",
+                "arguments": { "query": "federated" }
+            }
+        })),
+    )
+    .await;
+    let scoped_search = mcp_text_json(&rpc);
+    assert_eq!(scoped_search.as_array().unwrap().len(), 2);
+    assert!(contains_search_result(
+        &scoped_search,
+        "Rust team notes",
+        team_workspace_id,
+        &team_kb_id,
+    ));
+    assert!(contains_search_result(
+        &scoped_search,
+        "Team archive federated notes",
+        team_workspace_id,
+        &team_archive_kb_id,
+    ));
+
+    let (_, rpc) = json_request(
+        &app,
+        "POST",
+        &mcp_path,
+        Some(mcp_bearer),
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 13,
+            "method": "tools/call",
+            "params": {
+                "name": "search_knowledge",
+                "arguments": {
+                    "workspace_id": [personal_workspace_id.as_str()],
+                    "query": "federated"
+                }
+            }
+        })),
+    )
+    .await;
+    assert!(
+        rpc["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("outside this MCP scope")
     );
 
     let (_, rpc) = json_request(
@@ -409,6 +654,24 @@ async fn collaboration_and_scoped_mcp_flow_works() {
 
 fn mcp_text_json(response: &Value) -> Value {
     serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
+}
+
+fn contains_search_result(
+    results: &Value,
+    title: &str,
+    workspace_id: &str,
+    knowledge_base_id: &str,
+) -> bool {
+    results
+        .as_array()
+        .map(|results| {
+            results.iter().any(|result| {
+                result["title"] == title
+                    && result["workspace_id"] == workspace_id
+                    && result["knowledge_base_id"] == knowledge_base_id
+            })
+        })
+        .unwrap_or(false)
 }
 
 fn url_path(url: &str) -> String {

@@ -145,14 +145,20 @@ MCP clients can discover resources before operating on documents:
 - `list_workspaces()` returns the workspaces visible to the current MCP scope.
 - `list_knowledge_bases(workspace_id)` returns the visible knowledge bases in that workspace.
 
-Every document tool uses an explicit resource context. `search_knowledge`, `read_document`, `create_document`, `update_document`, `list_documents`, and `get_document_metadata` all require both `workspace_id` and `knowledge_base_id`; document-specific tools additionally require their existing `doc_id`, `folder_id`, or content fields. The server verifies that the knowledge base belongs to the workspace, both resources are available to the authenticated user, and the target document belongs to that knowledge base.
+Document read/write/list tools require one explicit `workspace_id` and `knowledge_base_id`; document-specific tools additionally require their existing `doc_id`, `folder_id`, or content fields. `search_knowledge` accepts either one UUID or an array of UUIDs for each resource parameter. Omit `workspace_id` to search every workspace visible to the current MCP scope, omit `knowledge_base_id` to search every knowledge base in the selected workspaces, or omit both to search every accessible knowledge base. Every explicit ID is still validated against the MCP scope and knowledge-base ownership. Search results include `workspace_id` and `knowledge_base_id` so a result can be used with a document tool.
 
 ```json
 {
   "name": "search_knowledge",
   "arguments": {
-    "workspace_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-    "knowledge_base_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    "workspace_id": [
+      "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+      "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
+    ],
+    "knowledge_base_id": [
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    ],
     "query": "deployment"
   }
 }

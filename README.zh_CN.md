@@ -145,14 +145,20 @@ MCP 客户端可以在操作文档前发现资源：
 - `list_workspaces()` 返回当前 MCP 作用域可见的工作区。
 - `list_knowledge_bases(workspace_id)` 返回指定工作区中可见的知识库。
 
-每个文档工具都使用显式资源上下文。`search_knowledge`、`read_document`、`create_document`、`update_document`、`list_documents` 和 `get_document_metadata` 都要求同时提供 `workspace_id` 与 `knowledge_base_id`；文档专用工具还要求提供已有的 `doc_id`、`folder_id` 或内容字段。服务器会验证知识库属于该工作区、当前认证用户可以访问这两个资源，并且目标文档属于该知识库。
+文档的读取、写入和列表工具要求提供单个 `workspace_id` 与 `knowledge_base_id`；文档专用工具还要求提供已有的 `doc_id`、`folder_id` 或内容字段。`search_knowledge` 的两个资源参数均可传入单个 UUID 或 UUID 数组。省略 `workspace_id` 时，会搜索当前 MCP 作用域中全部可见工作区；省略 `knowledge_base_id` 时，会搜索所选工作区中的全部知识库；同时省略两者时，会搜索全部可访问知识库。所有显式 ID 仍会按 MCP 作用域和知识库归属校验。搜索结果会包含 `workspace_id` 与 `knowledge_base_id`，可直接用于后续文档工具调用。
 
 ```json
 {
   "name": "search_knowledge",
   "arguments": {
-    "workspace_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-    "knowledge_base_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    "workspace_id": [
+      "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+      "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
+    ],
+    "knowledge_base_id": [
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    ],
     "query": "deployment"
   }
 }
