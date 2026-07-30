@@ -66,7 +66,14 @@ async function saveSetup() {
   <main class="setup-shell">
     <aside class="setup-rail">
       <div>
-        <p class="eyebrow">GugleRAG bootstrap</p>
+        <div class="sidebar-brand" style="padding:0 0 22px">
+          <span class="brand-mark">G</span>
+          <div>
+            <strong>GugleRAG</strong>
+            <small>初始化向导</small>
+          </div>
+        </div>
+        <p class="eyebrow">Bootstrap</p>
         <h1>按步骤完成初始化</h1>
         <p>先确定服务和数据库，再选择检索能力。重排模型可以现在启用，也可以上线后再改 .env。</p>
       </div>
@@ -149,11 +156,11 @@ async function saveSetup() {
       </section>
 
       <div class="form-actions">
-        <button type="button" class="secondary" :disabled="currentStep === 0" @click="previousStep">上一步</button>
+        <button type="button" class="btn btn-ghost" :disabled="currentStep === 0" @click="previousStep">上一步</button>
         <p v-if="saved" class="ok">.env 已写入，重启后端服务后生效。</p>
         <p v-else-if="error" class="bad">{{ error }}</p>
         <p v-else class="hint">目标文件：{{ status.env_path }}</p>
-        <button type="submit">{{ isLastStep ? "保存 .env" : "下一步" }}</button>
+        <button type="submit" class="btn btn-primary">{{ isLastStep ? "保存 .env" : "下一步" }}</button>
       </div>
     </form>
   </main>

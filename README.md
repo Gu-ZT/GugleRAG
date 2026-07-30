@@ -98,7 +98,9 @@ Useful endpoints:
 
 ## Collaboration and MCP
 
-Every user receives a personal workspace and its default knowledge base. Creating a team creates a team workspace and default knowledge base; team owners and admins can invite existing users by username. The invitation token can be shared with the invited user, who accepts it from the collaboration panel. A user may belong to multiple teams.
+Every user receives a personal workspace and its default knowledge base. Creating a team creates a team workspace and default knowledge base; team owners and admins can invite existing users by username. The invitation token can be shared with the invited user, who accepts it from the **Join team** dialog. A user may belong to multiple teams.
+
+In the Vue workspace, use the selector at the top-left to switch between personal and team workspaces. Its adjacent `+` menu contains team creation, member invitation, and team joining actions. The sidebar renders every knowledge base in the selected workspace as a collapsible group with its articles nested underneath; new knowledge bases and articles can be created directly from that tree.
 
 Documents belong to a knowledge base. Document and search requests accept `knowledge_base_id`; when it is omitted, the personal default knowledge base is used for backward compatibility.
 

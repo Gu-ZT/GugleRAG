@@ -1,6 +1,24 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
+import {
+  BookOpen,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  FilePlus2,
+  FileText,
+  LogIn,
+  LogOut,
+  Menu,
+  Plus,
+  Plug,
+  Search,
+  UserPlus,
+  Users,
+  X
+} from "@lucide/vue";
 import { request } from "../api/client";
+import { renderMarkdown } from "../markdown";
 import type {
   AuthResponse,
   DocumentItem,
@@ -8,26 +26,27 @@ import type {
   KnowledgeBase,
   McpConfig,
   PublicUser,
-  SearchResult,
   Team,
   TeamInvitation,
   TeamMember,
   Workspace
 } from "../types";
 
-const docs = ref<DocumentItem[]>([]);
 const activeDoc = ref<DocumentItem | null>(null);
 const token = ref(localStorage.getItem("guglerag.token") ?? "");
 const user = ref<PublicUser | null>(null);
 const authMode = ref<"login" | "register">("login");
 const editorMode = ref<"edit" | "preview">("edit");
-const sidebarMode = ref<"documents" | "teams" | "mcp">("documents");
+const sidebarOpen = ref(false);
+const workspaceMenuOpen = ref(false);
+const activeDialog = ref<"create-team" | "invite-member" | "join-team" | "create-knowledge-base" | "mcp" | null>(null);
 const query = ref("");
-const error = ref("");
-const notice = ref("");
+const authError = ref("");
 
 const workspaces = ref<Workspace[]>([]);
 const knowledgeBases = ref<KnowledgeBase[]>([]);
+const documentsByKnowledgeBase = ref<Record<string, DocumentItem[]>>({});
+const expandedKnowledgeBaseIds = ref<Set<string>>(new Set());
 const teams = ref<Team[]>([]);
 const teamMembers = ref<TeamMember[]>([]);
 const invitations = ref<TeamInvitation[]>([]);
@@ -40,25 +59,78 @@ const authForm = reactive({ username: "", password: "", display_name: "" });
 const editor = reactive({ title: "", content: "", tags: "" });
 const collaborationForm = reactive({ teamName: "", knowledgeBaseName: "", inviteUsername: "", inviteToken: "" });
 
+interface Toast {
+  id: number;
+  kind: "success" | "error";
+  message: string;
+}
+
+const toasts = ref<Toast[]>([]);
+let toastSeq = 0;
+
+function toast(kind: Toast["kind"], message: string) {
+  const id = ++toastSeq;
+  toasts.value.push({ id, kind, message });
+  window.setTimeout(() => {
+    toasts.value = toasts.value.filter((item) => item.id !== id);
+  }, 3600);
+}
+
 const hasActiveDoc = computed(() => Boolean(activeDoc.value?.id));
 const selectedWorkspace = computed(() =>
   workspaces.value.find((workspace) => workspace.id === selectedWorkspaceId.value)
 );
+const selectedKnowledgeBase = computed(() =>
+  knowledgeBases.value.find((kb) => kb.id === selectedKnowledgeBaseId.value)
+);
 const selectedTeam = computed(() =>
   teams.value.find((team) => team.id === selectedWorkspace.value?.team_id)
+);
+const pendingInvitations = computed(() =>
+  invitations.value.filter((item) => item.status === "pending")
+);
+const totalDocumentCount = computed(() =>
+  Object.values(documentsByKnowledgeBase.value).reduce((total, items) => total + items.length, 0)
+);
+
+const dirty = computed(() => {
+  if (!activeDoc.value) return false;
+  return (
+    editor.title !== activeDoc.value.title ||
+    editor.content !== (activeDoc.value.content ?? "") ||
+    editor.tags !== activeDoc.value.tags.join(", ")
+  );
+});
+
+const previewHtml = computed(() => renderMarkdown(editor.content));
+const tagChips = computed(() =>
+  editor.tags.split(",").map((tag) => tag.trim()).filter(Boolean)
 );
 
 function authHeaders(): Record<string, string> {
   return token.value ? { Authorization: `Bearer ${token.value}` } : {};
 }
 
-function setMessage(kind: "error" | "notice", message: string) {
-  error.value = kind === "error" ? message : "";
-  notice.value = kind === "notice" ? message : "";
+function formatTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const diff = Date.now() - date.getTime();
+  const minute = 60_000;
+  const hour = 3_600_000;
+  const day = 86_400_000;
+  if (diff < minute) return "刚刚";
+  if (diff < hour) return `${Math.floor(diff / minute)} 分钟前`;
+  if (diff < day) return `${Math.floor(diff / hour)} 小时前`;
+  if (diff < 7 * day) return `${Math.floor(diff / day)} 天前`;
+  return date.toLocaleDateString();
+}
+
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error ? err.message : fallback;
 }
 
 async function authenticate() {
-  setMessage("notice", "");
+  authError.value = "";
   const path = authMode.value === "login" ? "/api/auth/login" : "/api/auth/register";
   try {
     const response = await request<AuthResponse>(path, {
@@ -73,9 +145,9 @@ async function authenticate() {
     user.value = response.user;
     localStorage.setItem("guglerag.token", response.token);
     await loadContext();
-    setMessage("notice", "已进入工作区。");
+    toast("success", "已进入工作区。");
   } catch (err) {
-    setMessage("error", err instanceof Error ? err.message : "登录失败");
+    authError.value = errorMessage(err, "登录失败");
   }
 }
 
@@ -107,7 +179,8 @@ async function loadContext() {
 
 async function loadKnowledgeBases() {
   activeDoc.value = null;
-  docs.value = [];
+  documentsByKnowledgeBase.value = {};
+  expandedKnowledgeBaseIds.value = new Set();
   teamMembers.value = [];
   if (!selectedWorkspaceId.value) return;
   localStorage.setItem("guglerag.workspace", selectedWorkspaceId.value);
@@ -119,130 +192,195 @@ async function loadKnowledgeBases() {
   selectedKnowledgeBaseId.value = knowledgeBases.value.some((item) => item.id === saved)
     ? saved ?? ""
     : knowledgeBases.value[0]?.id ?? "";
+  if (selectedKnowledgeBaseId.value) {
+    expandedKnowledgeBaseIds.value = new Set([selectedKnowledgeBaseId.value]);
+  }
   if (selectedTeam.value) {
     teamMembers.value = await request<TeamMember[]>(
       `/api/teams/${selectedTeam.value.id}/members`,
       { headers: authHeaders() }
     );
   }
-  await loadDocuments();
+  await loadAllDocuments();
 }
 
-async function selectKnowledgeBase() {
-  activeDoc.value = null;
-  if (selectedWorkspaceId.value && selectedKnowledgeBaseId.value) {
+async function selectKnowledgeBase(knowledgeBaseId: string, openFirst = false, expand = true) {
+  const changed = selectedKnowledgeBaseId.value !== knowledgeBaseId;
+  selectedKnowledgeBaseId.value = knowledgeBaseId;
+  if (changed) activeDoc.value = null;
+  if (selectedWorkspaceId.value && knowledgeBaseId) {
     localStorage.setItem(
       `guglerag.knowledge-base.${selectedWorkspaceId.value}`,
-      selectedKnowledgeBaseId.value
+      knowledgeBaseId
     );
   }
-  await loadDocuments();
+  if (expand) {
+    expandedKnowledgeBaseIds.value = new Set([
+      ...expandedKnowledgeBaseIds.value,
+      knowledgeBaseId
+    ]);
+  }
+  const documents = documentsByKnowledgeBase.value[knowledgeBaseId] ?? [];
+  if (openFirst && documents.length > 0) await openDocument(documents[0].id, knowledgeBaseId);
 }
 
-async function loadDocuments() {
-  if (!selectedKnowledgeBaseId.value) {
-    docs.value = [];
-    return;
+async function loadAllDocuments(openSelectedFirst = true) {
+  let failed = false;
+  const entries = await Promise.all(
+    knowledgeBases.value.map(async (knowledgeBase) => {
+      try {
+        const documents = await request<DocumentItem[]>(
+          `/api/documents?knowledge_base_id=${knowledgeBase.id}`,
+          { headers: authHeaders() }
+        );
+        return [knowledgeBase.id, documents] as const;
+      } catch {
+        failed = true;
+        return [knowledgeBase.id, [] as DocumentItem[]] as const;
+      }
+    })
+  );
+  documentsByKnowledgeBase.value = Object.fromEntries(entries);
+  if (failed) toast("error", "部分知识库暂时无法读取");
+  if (!openSelectedFirst || !selectedKnowledgeBaseId.value) return;
+  const selectedDocuments = documentsByKnowledgeBase.value[selectedKnowledgeBaseId.value] ?? [];
+  if (selectedDocuments.length > 0) {
+    await openDocument(selectedDocuments[0].id, selectedKnowledgeBaseId.value);
   }
+}
+
+async function loadDocuments(knowledgeBaseId = selectedKnowledgeBaseId.value, openFirst = false) {
+  if (!knowledgeBaseId) return;
   try {
-    docs.value = await request<DocumentItem[]>(
-      `/api/documents?knowledge_base_id=${selectedKnowledgeBaseId.value}`,
+    const documents = await request<DocumentItem[]>(
+      `/api/documents?knowledge_base_id=${knowledgeBaseId}`,
       { headers: authHeaders() }
     );
-    if (docs.value.length > 0) await openDocument(docs.value[0].id);
+    documentsByKnowledgeBase.value = {
+      ...documentsByKnowledgeBase.value,
+      [knowledgeBaseId]: documents
+    };
+    if (openFirst && documents.length > 0) await openDocument(documents[0].id, knowledgeBaseId);
   } catch (err) {
-    setMessage("error", err instanceof Error ? err.message : "无法读取文档");
+    toast("error", errorMessage(err, "无法读取文档"));
   }
 }
 
 async function searchDocuments() {
-  if (!selectedKnowledgeBaseId.value) return;
   try {
-    if (!query.value.trim()) return loadDocuments();
-    const results = await request<SearchResult[]>(
-      `/api/search?q=${encodeURIComponent(query.value)}&limit=30&knowledge_base_id=${selectedKnowledgeBaseId.value}`,
-      { headers: authHeaders() }
+    if (!query.value.trim()) return loadAllDocuments(false);
+    const entries = await Promise.all(
+      knowledgeBases.value.map(async (knowledgeBase) => {
+        const results = await request<Array<{
+          id: string;
+          title: string;
+          excerpt: string;
+          updated_at: string;
+        }>>(
+          `/api/search?q=${encodeURIComponent(query.value)}&limit=30&knowledge_base_id=${knowledgeBase.id}`,
+          { headers: authHeaders() }
+        );
+        return [
+          knowledgeBase.id,
+          results.map((item) => ({
+            id: item.id,
+            knowledge_base_id: knowledgeBase.id,
+            title: item.title,
+            content: item.excerpt,
+            tags: [],
+            updated_at: item.updated_at
+          }))
+        ] as const;
+      })
     );
     activeDoc.value = null;
-    docs.value = results.map((item) => ({
-      id: item.id,
-      knowledge_base_id: selectedKnowledgeBaseId.value,
-      title: item.title,
-      content: item.excerpt,
-      tags: [],
-      updated_at: item.updated_at
-    }));
+    documentsByKnowledgeBase.value = Object.fromEntries(entries);
+    expandedKnowledgeBaseIds.value = new Set(
+      entries.filter(([, documents]) => documents.length > 0).map(([id]) => id)
+    );
   } catch (err) {
-    setMessage("error", err instanceof Error ? err.message : "搜索失败");
+    toast("error", errorMessage(err, "搜索失败"));
   }
 }
 
-async function openDocument(id: string) {
+async function openDocument(id: string, knowledgeBaseId?: string) {
   try {
     activeDoc.value = await request<DocumentItem>(`/api/documents/${id}`, { headers: authHeaders() });
+    const ownerId = knowledgeBaseId ?? activeDoc.value.knowledge_base_id;
+    selectedKnowledgeBaseId.value = ownerId;
+    if (selectedWorkspaceId.value) {
+      localStorage.setItem(`guglerag.knowledge-base.${selectedWorkspaceId.value}`, ownerId);
+    }
     editor.title = activeDoc.value.title;
     editor.content = activeDoc.value.content ?? "";
     editor.tags = activeDoc.value.tags.join(", ");
     editorMode.value = "edit";
+    sidebarOpen.value = false;
   } catch (err) {
-    setMessage("error", err instanceof Error ? err.message : "无法打开文档");
+    toast("error", errorMessage(err, "无法打开文档"));
   }
 }
 
-async function createDocument() {
-  if (!selectedKnowledgeBaseId.value) return;
+async function createDocument(knowledgeBaseId = selectedKnowledgeBaseId.value) {
+  if (!knowledgeBaseId) return;
   try {
     const created = await request<DocumentItem>("/api/documents", {
       method: "POST",
       headers: authHeaders(),
       body: JSON.stringify({
-        knowledge_base_id: selectedKnowledgeBaseId.value,
+        knowledge_base_id: knowledgeBaseId,
         title: "未命名文档",
         content: "# 未命名文档\n\n开始记录知识。",
         tags: []
       })
     });
-    docs.value = [created, ...docs.value];
-    await openDocument(created.id);
-    setMessage("notice", "已创建文档。");
+    documentsByKnowledgeBase.value = {
+      ...documentsByKnowledgeBase.value,
+      [knowledgeBaseId]: [created, ...(documentsByKnowledgeBase.value[knowledgeBaseId] ?? [])]
+    };
+    expandedKnowledgeBaseIds.value = new Set([...expandedKnowledgeBaseIds.value, knowledgeBaseId]);
+    await openDocument(created.id, knowledgeBaseId);
+    toast("success", "已创建文档。");
   } catch (err) {
-    setMessage("error", err instanceof Error ? err.message : "创建文档失败");
+    toast("error", errorMessage(err, "创建文档失败"));
   }
 }
 
 async function saveDocument() {
   if (!activeDoc.value) return;
   try {
+    const knowledgeBaseId = activeDoc.value.knowledge_base_id;
     const saved = await request<DocumentItem>(`/api/documents/${activeDoc.value.id}`, {
       method: "PUT",
       headers: authHeaders(),
       body: JSON.stringify({
-        knowledge_base_id: selectedKnowledgeBaseId.value,
+        knowledge_base_id: knowledgeBaseId,
         title: editor.title,
         content: editor.content,
         tags: editor.tags.split(",").map((tag) => tag.trim()).filter(Boolean)
       })
     });
-    await loadDocuments();
-    await openDocument(saved.id);
-    setMessage("notice", "文档已保存。");
+    await loadDocuments(knowledgeBaseId);
+    await openDocument(saved.id, knowledgeBaseId);
+    toast("success", "文档已保存。");
   } catch (err) {
-    setMessage("error", err instanceof Error ? err.message : "保存失败");
+    toast("error", errorMessage(err, "保存失败"));
   }
 }
 
 async function deleteDocument() {
   if (!activeDoc.value || !window.confirm("删除当前文档？")) return;
   try {
+    const knowledgeBaseId = activeDoc.value.knowledge_base_id;
     await request(`/api/documents/${activeDoc.value.id}`, {
       method: "DELETE",
       headers: authHeaders()
     });
     activeDoc.value = null;
-    await loadDocuments();
-    setMessage("notice", "文档已删除。");
+    await loadDocuments(knowledgeBaseId, true);
+    toast("success", "文档已删除。");
   } catch (err) {
-    setMessage("error", err instanceof Error ? err.message : "删除失败");
+    toast("error", errorMessage(err, "删除失败"));
   }
 }
 
@@ -258,9 +396,10 @@ async function createTeam() {
     await loadContext();
     selectedWorkspaceId.value = team.workspace_id;
     await loadKnowledgeBases();
-    setMessage("notice", "团队已创建。");
+    closeDialog();
+    toast("success", "团队已创建。");
   } catch (err) {
-    setMessage("error", err instanceof Error ? err.message : "创建团队失败");
+    toast("error", errorMessage(err, "创建团队失败"));
   }
 }
 
@@ -277,11 +416,12 @@ async function createKnowledgeBase() {
     );
     collaborationForm.knowledgeBaseName = "";
     await loadKnowledgeBases();
-    selectedKnowledgeBaseId.value = knowledgeBase.id;
-    await selectKnowledgeBase();
-    setMessage("notice", "知识库已创建。");
+    await selectKnowledgeBase(knowledgeBase.id);
+    expandedKnowledgeBaseIds.value = new Set([...expandedKnowledgeBaseIds.value, knowledgeBase.id]);
+    closeDialog();
+    toast("success", "知识库已创建。");
   } catch (err) {
-    setMessage("error", err instanceof Error ? err.message : "创建知识库失败");
+    toast("error", errorMessage(err, "创建知识库失败"));
   }
 }
 
@@ -299,9 +439,9 @@ async function inviteMember() {
     collaborationForm.inviteUsername = "";
     lastInviteToken.value = result.invite_token;
     await copyText(result.invite_token);
-    setMessage("notice", "邀请码已复制。");
+    toast("success", "邀请码已复制。");
   } catch (err) {
-    setMessage("error", err instanceof Error ? err.message : "邀请失败");
+    toast("error", errorMessage(err, "邀请失败"));
   }
 }
 
@@ -315,9 +455,10 @@ async function acceptInvitation() {
     });
     collaborationForm.inviteToken = "";
     await loadContext();
-    setMessage("notice", "已加入团队。");
+    closeDialog();
+    toast("success", "已加入团队。");
   } catch (err) {
-    setMessage("error", err instanceof Error ? err.message : "加入团队失败");
+    toast("error", errorMessage(err, "加入团队失败"));
   }
 }
 
@@ -330,9 +471,9 @@ async function createMcpConfig(scope: "user" | "group" | "all") {
     });
     mcpConfig.value = JSON.stringify(config, null, 2);
     await copyText(mcpConfig.value);
-    setMessage("notice", "MCP 配置已复制。");
+    toast("success", "MCP 配置已复制。");
   } catch (err) {
-    setMessage("error", err instanceof Error ? err.message : "生成 MCP 配置失败");
+    toast("error", errorMessage(err, "生成 MCP 配置失败"));
   }
 }
 
@@ -341,135 +482,349 @@ async function copyText(value: string) {
   try {
     await navigator.clipboard.writeText(value);
   } catch {
-    // Clipboard access can be unavailable on non-secure development origins.
+    // 非安全上下文下剪贴板可能不可用。
   }
+}
+
+function toggleKnowledgeBase(knowledgeBaseId: string) {
+  const next = new Set(expandedKnowledgeBaseIds.value);
+  if (next.has(knowledgeBaseId)) next.delete(knowledgeBaseId);
+  else next.add(knowledgeBaseId);
+  expandedKnowledgeBaseIds.value = next;
+}
+
+function openDialog(dialog: NonNullable<typeof activeDialog.value>) {
+  workspaceMenuOpen.value = false;
+  lastInviteToken.value = "";
+  mcpConfig.value = "";
+  activeDialog.value = dialog;
+}
+
+function closeDialog() {
+  activeDialog.value = null;
 }
 
 function logout() {
   token.value = "";
   user.value = null;
-  docs.value = [];
+  documentsByKnowledgeBase.value = {};
   workspaces.value = [];
   knowledgeBases.value = [];
   activeDoc.value = null;
   localStorage.removeItem("guglerag.token");
 }
 
-onMounted(loadMe);
+function onKeydown(event: KeyboardEvent) {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+    if (!user.value || !hasActiveDoc.value) return;
+    event.preventDefault();
+    if (dirty.value) saveDocument();
+  }
+  if (event.key === "Escape") {
+    sidebarOpen.value = false;
+    workspaceMenuOpen.value = false;
+    closeDialog();
+  }
+}
+
+function onWindowClick() {
+  workspaceMenuOpen.value = false;
+}
+
+function onBeforeUnload(event: BeforeUnloadEvent) {
+  if (dirty.value) event.preventDefault();
+}
+
+onMounted(() => {
+  window.addEventListener("keydown", onKeydown);
+  window.addEventListener("click", onWindowClick);
+  window.addEventListener("beforeunload", onBeforeUnload);
+  loadMe();
+});
+
+onUnmounted(() => {
+  window.removeEventListener("keydown", onKeydown);
+  window.removeEventListener("click", onWindowClick);
+  window.removeEventListener("beforeunload", onBeforeUnload);
+});
 </script>
 
 <template>
+  <!-- 顶部 toast -->
+  <div class="toast-stack" aria-live="polite">
+    <div v-for="item in toasts" :key="item.id" class="toast" :class="item.kind">{{ item.message }}</div>
+  </div>
+
+  <!-- 登录 / 注册 -->
   <main v-if="!user" class="auth-screen">
     <section class="auth-panel">
-      <p class="eyebrow">GugleRAG workspace</p>
-      <h1>{{ authMode === "login" ? "登录知识库" : "创建账号" }}</h1>
+      <div class="auth-brand">
+        <span class="boot-mark">G</span>
+        <div>
+          <strong>GugleRAG</strong>
+          <p class="hint">团队知识库与 AI 检索</p>
+        </div>
+      </div>
+      <h1>{{ authMode === "login" ? "欢迎回来" : "创建账号" }}</h1>
       <div class="auth-tabs">
         <button :class="{ active: authMode === 'login' }" @click="authMode = 'login'">登录</button>
         <button :class="{ active: authMode === 'register' }" @click="authMode = 'register'">注册</button>
       </div>
-      <label>用户名<input v-model="authForm.username" autocomplete="username" /></label>
-      <label>密码<input v-model="authForm.password" type="password" autocomplete="current-password" /></label>
-      <label v-if="authMode === 'register'">显示名称<input v-model="authForm.display_name" /></label>
-      <button @click="authenticate">{{ authMode === "login" ? "登录" : "注册并登录" }}</button>
-      <p v-if="error" class="bad">{{ error }}</p>
+      <label>用户名<input v-model="authForm.username" autocomplete="username" @keydown.enter="authenticate" /></label>
+      <label>密码<input v-model="authForm.password" type="password" autocomplete="current-password" @keydown.enter="authenticate" /></label>
+      <label v-if="authMode === 'register'">显示名称<input v-model="authForm.display_name" @keydown.enter="authenticate" /></label>
+      <button class="btn btn-primary" @click="authenticate">{{ authMode === "login" ? "登录" : "注册并登录" }}</button>
+      <p v-if="authError" class="bad">{{ authError }}</p>
+      <p v-else class="hint">首个注册的账号将成为管理员。</p>
     </section>
   </main>
 
+  <!-- 工作区 -->
   <main v-else class="workspace">
-    <aside>
-      <div class="brand-row">
-        <div><div class="brand">GugleRAG</div><p>{{ user.display_name }} · {{ user.role }}</p></div>
-        <button class="icon-button" title="退出登录" @click="logout">退出</button>
-      </div>
+    <button v-if="sidebarOpen" class="backdrop" aria-label="关闭侧栏" @click="sidebarOpen = false" />
 
-      <div class="context-selectors">
-        <label>工作区
-          <select v-model="selectedWorkspaceId" @change="loadKnowledgeBases">
-            <option v-for="workspace in workspaces" :key="workspace.id" :value="workspace.id">
-              {{ workspace.kind === "personal" ? "个人 · " : "团队 · " }}{{ workspace.name }}
-            </option>
-          </select>
-        </label>
-        <label>知识库
-          <select v-model="selectedKnowledgeBaseId" @change="selectKnowledgeBase">
-            <option v-for="knowledgeBase in knowledgeBases" :key="knowledgeBase.id" :value="knowledgeBase.id">
-              {{ knowledgeBase.name }}
-            </option>
-          </select>
-        </label>
-      </div>
-
-      <div class="sidebar-tabs">
-        <button :class="{ active: sidebarMode === 'documents' }" @click="sidebarMode = 'documents'">文档</button>
-        <button :class="{ active: sidebarMode === 'teams' }" @click="sidebarMode = 'teams'">协作</button>
-        <button :class="{ active: sidebarMode === 'mcp' }" @click="sidebarMode = 'mcp'">MCP</button>
-      </div>
-
-      <template v-if="sidebarMode === 'documents'">
-        <div class="search-row">
-          <input v-model="query" placeholder="搜索知识库" @keydown.enter="searchDocuments" />
-          <button class="secondary" @click="searchDocuments">搜索</button>
+    <aside class="sidebar" :class="{ open: sidebarOpen }">
+      <div class="sidebar-brand">
+        <span class="brand-mark">G</span>
+        <div>
+          <strong>GugleRAG</strong>
+          <small>团队知识库</small>
         </div>
-        <button :disabled="!selectedKnowledgeBaseId" @click="createDocument">新建文档</button>
-        <div class="doc-list">
-          <button v-for="doc in docs" :key="doc.id" class="doc-row" :class="{ active: activeDoc?.id === doc.id }" @click="openDocument(doc.id)">
-            <strong>{{ doc.title }}</strong><span>{{ new Date(doc.updated_at).toLocaleString() }}</span>
+      </div>
+
+      <div class="sidebar-context" @click.stop>
+        <select v-model="selectedWorkspaceId" class="rail-select" aria-label="选择工作区" @change="loadKnowledgeBases">
+          <option v-for="workspace in workspaces" :key="workspace.id" :value="workspace.id">
+            {{ workspace.kind === "personal" ? "个人 · " : "团队 · " }}{{ workspace.name }}
+          </option>
+        </select>
+        <button
+          class="workspace-add-btn"
+          title="团队协作"
+          aria-label="团队协作"
+          :aria-expanded="workspaceMenuOpen"
+          @click="workspaceMenuOpen = !workspaceMenuOpen"
+        >
+          <Plus :size="18" />
+        </button>
+        <div v-if="workspaceMenuOpen" class="workspace-menu">
+          <button @click="openDialog('create-team')"><Users :size="16" /><span>创建团队</span></button>
+          <button v-if="selectedTeam" @click="openDialog('invite-member')"><UserPlus :size="16" /><span>邀请成员</span></button>
+          <button @click="openDialog('join-team')"><LogIn :size="16" /><span>加入团队</span></button>
+        </div>
+      </div>
+
+      <div class="sidebar-body">
+        <div class="rail-search">
+          <Search :size="15" />
+          <input v-model="query" class="rail-input" placeholder="搜索当前工作区…" @keydown.enter="searchDocuments" />
+          <button v-if="query" title="清除搜索" aria-label="清除搜索" @click="query = ''; searchDocuments()">
+            <X :size="14" />
           </button>
         </div>
-      </template>
 
-      <div v-else-if="sidebarMode === 'teams'" class="sidebar-section-list">
-        <section>
-          <h2>新建知识库</h2>
-          <div class="inline-form"><input v-model="collaborationForm.knowledgeBaseName" placeholder="知识库名称" /><button @click="createKnowledgeBase">创建</button></div>
+        <section class="knowledge-tree">
+          <div class="sidebar-heading">
+            <span>知识库 · {{ knowledgeBases.length }}</span>
+            <button class="heading-icon-btn" title="新建知识库" aria-label="新建知识库" @click="openDialog('create-knowledge-base')">
+              <Plus :size="15" />
+            </button>
+          </div>
+
+          <div v-if="knowledgeBases.length" class="knowledge-groups">
+            <section v-for="knowledgeBase in knowledgeBases" :key="knowledgeBase.id" class="knowledge-group">
+              <div class="knowledge-row" :class="{ active: selectedKnowledgeBaseId === knowledgeBase.id }">
+                <button
+                  class="knowledge-toggle"
+                  :aria-expanded="expandedKnowledgeBaseIds.has(knowledgeBase.id)"
+                  @click="toggleKnowledgeBase(knowledgeBase.id); selectKnowledgeBase(knowledgeBase.id, false, false)"
+                >
+                  <ChevronDown v-if="expandedKnowledgeBaseIds.has(knowledgeBase.id)" :size="15" />
+                  <ChevronRight v-else :size="15" />
+                  <BookOpen :size="15" />
+                  <span>{{ knowledgeBase.name }}</span>
+                  <small>{{ documentsByKnowledgeBase[knowledgeBase.id]?.length ?? 0 }}</small>
+                </button>
+                <button
+                  class="knowledge-add-btn"
+                  title="在此知识库中新建文章"
+                  aria-label="在此知识库中新建文章"
+                  @click="createDocument(knowledgeBase.id)"
+                >
+                  <Plus :size="14" />
+                </button>
+              </div>
+
+              <div v-if="expandedKnowledgeBaseIds.has(knowledgeBase.id)" class="article-list">
+                <button
+                  v-for="doc in documentsByKnowledgeBase[knowledgeBase.id] ?? []"
+                  :key="doc.id"
+                  class="article-item"
+                  :class="{ active: activeDoc?.id === doc.id }"
+                  @click="openDocument(doc.id, knowledgeBase.id)"
+                >
+                  <FileText :size="14" />
+                  <span>{{ doc.title }}</span>
+                  <small>{{ formatTime(doc.updated_at) }}</small>
+                </button>
+                <p v-if="!(documentsByKnowledgeBase[knowledgeBase.id]?.length)" class="article-empty">暂无文章</p>
+              </div>
+            </section>
+          </div>
+          <div v-else class="rail-empty">
+            <BookOpen :size="22" />
+            <p>当前工作区还没有知识库</p>
+            <button @click="openDialog('create-knowledge-base')">新建知识库</button>
+          </div>
         </section>
-        <section>
-          <h2>新建团队</h2>
-          <div class="inline-form"><input v-model="collaborationForm.teamName" placeholder="团队名称" /><button @click="createTeam">创建</button></div>
-        </section>
-        <section v-if="selectedTeam">
-          <h2>{{ selectedTeam.name }} 成员</h2>
-          <div class="member-list"><div v-for="member in teamMembers" :key="member.user_id"><span>{{ member.display_name }}</span><small>{{ member.role }}</small></div></div>
-          <div class="inline-form"><input v-model="collaborationForm.inviteUsername" placeholder="用户名" /><button @click="inviteMember">邀请</button></div>
-          <pre v-if="lastInviteToken" class="invite-output">{{ lastInviteToken }}</pre>
-        </section>
-        <section>
-          <h2>加入团队</h2>
-          <div class="inline-form"><input v-model="collaborationForm.inviteToken" placeholder="邀请码" /><button @click="acceptInvitation">加入</button></div>
-          <p v-if="invitations.some((item) => item.status === 'pending')" class="hint">{{ invitations.filter((item) => item.status === "pending").map((item) => item.team_name).join("、") }}</p>
-        </section>
+
+        <p v-if="knowledgeBases.length" class="tree-summary">{{ totalDocumentCount }} 篇文章</p>
       </div>
 
-      <div v-else class="sidebar-section-list">
-        <section>
-          <h2>个人工作区</h2><button @click="createMcpConfig('user')">复制配置</button>
-        </section>
-        <section v-if="selectedTeam">
-          <h2>{{ selectedTeam.name }}</h2><button @click="createMcpConfig('group')">复制团队配置</button>
-        </section>
-        <section>
-          <h2>全部可访问知识库</h2><button @click="createMcpConfig('all')">复制账户配置</button>
-        </section>
-        <pre v-if="mcpConfig" class="mcp-output">{{ mcpConfig }}</pre>
+      <div class="sidebar-user">
+        <span class="avatar">{{ (user.display_name || user.username).slice(0, 1).toUpperCase() }}</span>
+        <div class="user-meta">
+          <strong>{{ user.display_name }}</strong>
+          <small>{{ user.role }}</small>
+        </div>
+        <button class="rail-icon-btn" title="MCP 配置" aria-label="MCP 配置" @click="openDialog('mcp')">
+          <Plug :size="17" />
+        </button>
+        <button class="rail-icon-btn" title="退出登录" @click="logout">
+          <LogOut :size="17" />
+        </button>
       </div>
     </aside>
 
-    <section class="editor-pane">
-      <div class="toolbar">
-        <div><h1>{{ hasActiveDoc ? editor.title || "未命名文档" : "选择或新建文档" }}</h1><span v-if="activeDoc">{{ activeDoc.versions?.length ?? 0 }} 个历史版本</span></div>
-        <div class="toolbar-actions">
-          <button class="secondary" :class="{ active: editorMode === 'edit' }" @click="editorMode = 'edit'">编辑</button>
-          <button class="secondary" :class="{ active: editorMode === 'preview' }" @click="editorMode = 'preview'">预览</button>
-          <button :disabled="!hasActiveDoc" @click="saveDocument">保存</button>
-          <button class="danger" :disabled="!hasActiveDoc" @click="deleteDocument">删除</button>
+    <section class="main-pane">
+      <div class="topbar">
+        <div style="display:flex; align-items:center; gap:12px; min-width:0">
+          <button class="menu-toggle" aria-label="打开侧栏" @click="sidebarOpen = true">
+            <Menu :size="17" />
+          </button>
+          <nav class="breadcrumb">
+            <span class="crumb">{{ selectedWorkspace?.name ?? "工作区" }}</span>
+            <span class="sep">/</span>
+            <span class="crumb">{{ selectedKnowledgeBase?.name ?? "知识库" }}</span>
+            <template v-if="hasActiveDoc">
+              <span class="sep">/</span>
+              <span class="crumb current">{{ editor.title || "未命名文档" }}</span>
+            </template>
+          </nav>
+        </div>
+        <div v-if="hasActiveDoc" class="topbar-actions">
+          <span class="save-state" :class="{ dirty }">{{ dirty ? "未保存" : "已保存" }}</span>
+          <div class="seg">
+            <button :class="{ active: editorMode === 'edit' }" @click="editorMode = 'edit'">编辑</button>
+            <button :class="{ active: editorMode === 'preview' }" @click="editorMode = 'preview'">预览</button>
+          </div>
+          <button class="btn btn-primary" :disabled="!dirty" @click="saveDocument">保存</button>
+          <button class="btn btn-danger" @click="deleteDocument">删除</button>
         </div>
       </div>
-      <p v-if="error" class="bad">{{ error }}</p><p v-if="notice" class="ok">{{ notice }}</p>
-      <div v-if="hasActiveDoc" class="editor-grid">
-        <label>标题<input v-model="editor.title" /></label><label>标签<input v-model="editor.tags" placeholder="用逗号分隔" /></label>
-        <textarea v-if="editorMode === 'edit'" v-model="editor.content" /><pre v-else class="preview">{{ editor.content }}</pre>
+
+      <div v-if="hasActiveDoc" class="editor-scroll">
+        <div class="editor-sheet">
+          <input v-model="editor.title" class="doc-title-input" placeholder="未命名文档" />
+          <div class="doc-meta-row">
+            <span v-if="activeDoc">更新于 {{ formatTime(activeDoc.updated_at) }}</span>
+            <span class="dot">·</span>
+            <span>{{ activeDoc?.versions?.length ?? 0 }} 个历史版本</span>
+            <span class="dot">·</span>
+            <span class="tags-editor">
+              <span v-for="tag in tagChips" :key="tag" class="tag-chip">{{ tag }}</span>
+              <input v-model="editor.tags" placeholder="添加标签，逗号分隔" />
+            </span>
+          </div>
+          <textarea v-if="editorMode === 'edit'" v-model="editor.content" class="editor-area" placeholder="用 Markdown 记录知识…" />
+          <div v-else class="markdown" v-html="previewHtml" />
+        </div>
       </div>
-      <div v-else class="empty-state"><h2>还没有打开的文档</h2><p>{{ selectedKnowledgeBaseId ? "选择已有内容或新建文档" : "先创建一个知识库" }}</p><button :disabled="!selectedKnowledgeBaseId" @click="createDocument">新建文档</button></div>
+
+      <div v-else class="empty-state">
+        <span class="empty-mark">
+          <FilePlus2 :size="28" />
+        </span>
+        <h2>{{ selectedKnowledgeBaseId ? "选择一篇文档，或开始新的记录" : "先创建一个知识库" }}</h2>
+        <p>{{ selectedKnowledgeBaseId ? "从左侧知识库中选择文章" : "从左侧知识库标题旁创建后即可开始写作" }}</p>
+        <button v-if="selectedKnowledgeBaseId" class="btn btn-primary" @click="createDocument()">新建文档</button>
+      </div>
     </section>
   </main>
+
+  <Teleport to="body">
+    <div v-if="activeDialog" class="dialog-backdrop" @click.self="closeDialog">
+      <section class="dialog" :class="{ 'dialog-wide': activeDialog === 'mcp' }" role="dialog" aria-modal="true">
+        <header class="dialog-header">
+          <div>
+            <p class="dialog-kicker">{{ selectedWorkspace?.name ?? "GugleRAG" }}</p>
+            <h2 v-if="activeDialog === 'create-team'">创建团队</h2>
+            <h2 v-else-if="activeDialog === 'invite-member'">邀请成员</h2>
+            <h2 v-else-if="activeDialog === 'join-team'">加入团队</h2>
+            <h2 v-else-if="activeDialog === 'create-knowledge-base'">新建知识库</h2>
+            <h2 v-else>MCP 配置</h2>
+          </div>
+          <button class="dialog-close" title="关闭" aria-label="关闭" @click="closeDialog"><X :size="18" /></button>
+        </header>
+
+        <form v-if="activeDialog === 'create-team'" class="dialog-form" @submit.prevent="createTeam">
+          <label>团队名称<input v-model="collaborationForm.teamName" autofocus placeholder="例如：产品研发" /></label>
+          <p class="hint">创建后会自动生成团队工作区和默认知识库。</p>
+          <footer class="dialog-actions">
+            <button type="button" class="btn btn-ghost" @click="closeDialog">取消</button>
+            <button class="btn btn-primary" :disabled="!collaborationForm.teamName.trim()"><Users :size="16" />创建团队</button>
+          </footer>
+        </form>
+
+        <form v-else-if="activeDialog === 'invite-member'" class="dialog-form" @submit.prevent="inviteMember">
+          <label>用户名<input v-model="collaborationForm.inviteUsername" autofocus placeholder="输入已注册用户的用户名" /></label>
+          <div v-if="teamMembers.length" class="dialog-member-list">
+            <div v-for="member in teamMembers" :key="member.user_id" class="member-row">
+              <span>{{ member.display_name }} <small>@{{ member.username }}</small></span>
+              <small>{{ member.role }}</small>
+            </div>
+          </div>
+          <div v-if="lastInviteToken" class="token-output">
+            <code>{{ lastInviteToken }}</code>
+            <button type="button" title="复制邀请码" aria-label="复制邀请码" @click="copyText(lastInviteToken)"><Copy :size="15" /></button>
+          </div>
+          <footer class="dialog-actions">
+            <button type="button" class="btn btn-ghost" @click="closeDialog">关闭</button>
+            <button class="btn btn-primary" :disabled="!collaborationForm.inviteUsername.trim()"><UserPlus :size="16" />生成邀请</button>
+          </footer>
+        </form>
+
+        <form v-else-if="activeDialog === 'join-team'" class="dialog-form" @submit.prevent="acceptInvitation">
+          <label>邀请码<input v-model="collaborationForm.inviteToken" autofocus placeholder="粘贴团队邀请码" /></label>
+          <p v-if="pendingInvitations.length" class="hint">待加入：{{ pendingInvitations.map((item) => item.team_name).join("、") }}</p>
+          <footer class="dialog-actions">
+            <button type="button" class="btn btn-ghost" @click="closeDialog">取消</button>
+            <button class="btn btn-primary" :disabled="!collaborationForm.inviteToken.trim()"><LogIn :size="16" />加入团队</button>
+          </footer>
+        </form>
+
+        <form v-else-if="activeDialog === 'create-knowledge-base'" class="dialog-form" @submit.prevent="createKnowledgeBase">
+          <label>知识库名称<input v-model="collaborationForm.knowledgeBaseName" autofocus placeholder="例如：产品文档" /></label>
+          <p class="hint">知识库将创建在“{{ selectedWorkspace?.name }}”工作区。</p>
+          <footer class="dialog-actions">
+            <button type="button" class="btn btn-ghost" @click="closeDialog">取消</button>
+            <button class="btn btn-primary" :disabled="!collaborationForm.knowledgeBaseName.trim()"><BookOpen :size="16" />创建知识库</button>
+          </footer>
+        </form>
+
+        <div v-else class="mcp-panel">
+          <button class="mcp-scope" @click="createMcpConfig('user')">
+            <span><strong>个人工作区</strong><small>仅访问你的个人知识库</small></span><Copy :size="16" />
+          </button>
+          <button v-if="selectedTeam" class="mcp-scope" @click="createMcpConfig('group')">
+            <span><strong>{{ selectedTeam.name }}</strong><small>访问当前团队工作区的知识库</small></span><Copy :size="16" />
+          </button>
+          <button class="mcp-scope" @click="createMcpConfig('all')">
+            <span><strong>全部可访问知识库</strong><small>覆盖个人与所有已加入团队</small></span><Copy :size="16" />
+          </button>
+          <pre v-if="mcpConfig" class="code-block">{{ mcpConfig }}</pre>
+        </div>
+      </section>
+    </div>
+  </Teleport>
 </template>

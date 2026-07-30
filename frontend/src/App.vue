@@ -21,8 +21,8 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div v-if="loading" class="boot">加载 GugleRAG...</div>
-  <div v-else-if="error" class="boot error">{{ error }}</div>
+  <div v-if="loading" class="boot"><span class="boot-mark">G</span>加载 GugleRAG…</div>
+  <div v-else-if="error" class="boot"><span class="boot-mark">G</span><span class="bad">{{ error }}</span></div>
   <SetupView v-else-if="status?.setup_required" :status="status" />
   <WorkspaceView v-else />
 </template>

@@ -12,6 +12,8 @@
 - Users, documents, and document versions are persisted through SQLx. Keep query code database-vendor neutral.
 - Do not commit `.env`, local data files, `target/`, `frontend/node_modules/`, or `frontend/dist/`.
 - Frontend development should happen in `frontend/` with Vue 3, TypeScript, and Vite. The Vite proxy expects the backend on `127.0.0.1:8080`.
+- Keep the workspace selector at the top-left. Its adjacent `+` menu owns team creation, member invitation, and team joining; the main sidebar stays focused on collapsible knowledge-base groups and their articles.
+- Use `@lucide/vue` for interface icons instead of adding new inline SVG markup.
 - Keep the workspace usable through normal account flows; do not require users to paste bearer tokens manually in the UI.
 - Users have one personal workspace and may belong to multiple team workspaces. Knowledge bases are the document ownership boundary; document and search APIs must enforce knowledge-base access through workspace membership.
 - Scoped MCP URLs are `/mcp/user/<token>`, `/mcp/group/<token>`, and `/mcp/all/<token>`. Validate both the path token and Bearer token, and keep MCP token values hashed at rest.
