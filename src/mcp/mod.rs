@@ -1,7 +1,7 @@
 use crate::{
     AppState,
-    auth::{self, hash_access_token, hash_password},
-    domain::{Document, DocumentVersion, KnowledgeBase, Role, User, Workspace},
+    auth::{self, hash_password},
+    domain::{Document, DocumentVersion, KnowledgeBase, Role, User, Workspace, WorkspaceKind},
     error::AppError,
     search,
 };
@@ -23,7 +23,8 @@ struct McpScope {
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/mcp", post(mcp_endpoint))
-        .route("/mcp/{scope}/{token}", post(scoped_mcp_endpoint))
+        .route("/mcp/all", post(all_workspaces_mcp_endpoint))
+        .route("/mcp/{scope}/{workspace_id}", post(workspace_mcp_endpoint))
 }
 
 async fn mcp_endpoint(
@@ -52,9 +53,8 @@ async fn mcp_endpoint(
     mcp_response(&state, request, user_id, scope.as_ref()).await
 }
 
-async fn scoped_mcp_endpoint(
+async fn all_workspaces_mcp_endpoint(
     State(state): State<AppState>,
-    Path((scope, raw_token)): Path<(String, String)>,
     headers: HeaderMap,
     Json(request): Json<Value>,
 ) -> Json<Value> {
@@ -62,27 +62,36 @@ async fn scoped_mcp_endpoint(
     if !state.config.mcp_enabled {
         return Json(json_rpc_error(id, -32000, "MCP endpoint disabled"));
     }
-    let bearer = headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "));
-    if bearer != Some(raw_token.as_str()) {
-        return Json(json_rpc_error(id, -32001, "invalid MCP authorization"));
-    }
-    let token = match state
-        .database
-        .find_mcp_token(&hash_access_token(&raw_token))
-        .await
-    {
-        Ok(Some(token)) if token.scope == scope => token,
-        Ok(_) => return Json(json_rpc_error(id, -32001, "invalid MCP token")),
-        Err(error) => return Json(json_rpc_error(id, -32000, &error.to_string())),
+    let user_id = match auth::require_user(&headers, &state).await {
+        Ok(user_id) => user_id,
+        Err(error) => return Json(json_rpc_error(id, -32001, &error.to_string())),
     };
-    let scope = match mcp_scope_for_token(&state, &token).await {
+    let scope = match mcp_scope_for_user(&state, user_id).await {
         Ok(scope) => scope,
         Err(error) => return Json(json_rpc_error(id, -32001, &error.to_string())),
     };
-    mcp_response(&state, request, Some(token.user_id), Some(&scope)).await
+    mcp_response(&state, request, Some(user_id), Some(&scope)).await
+}
+
+async fn workspace_mcp_endpoint(
+    State(state): State<AppState>,
+    Path((scope_name, workspace_id)): Path<(String, Uuid)>,
+    headers: HeaderMap,
+    Json(request): Json<Value>,
+) -> Json<Value> {
+    let id = request.get("id").cloned().unwrap_or(Value::Null);
+    if !state.config.mcp_enabled {
+        return Json(json_rpc_error(id, -32000, "MCP endpoint disabled"));
+    }
+    let user_id = match auth::require_user(&headers, &state).await {
+        Ok(user_id) => user_id,
+        Err(error) => return Json(json_rpc_error(id, -32001, &error.to_string())),
+    };
+    let scope = match mcp_scope_for_workspace(&state, user_id, &scope_name, workspace_id).await {
+        Ok(scope) => scope,
+        Err(error) => return Json(json_rpc_error(id, -32001, &error.to_string())),
+    };
+    mcp_response(&state, request, Some(user_id), Some(&scope)).await
 }
 
 async fn mcp_response(
@@ -121,53 +130,37 @@ async fn mcp_scope_for_user(state: &AppState, user_id: Uuid) -> Result<McpScope,
     })
 }
 
-async fn mcp_scope_for_token(
+async fn mcp_scope_for_workspace(
     state: &AppState,
-    token: &crate::domain::McpToken,
+    user_id: Uuid,
+    scope_name: &str,
+    workspace_id: Uuid,
 ) -> Result<McpScope, AppError> {
-    match token.scope.as_str() {
-        "user" => {
-            let (workspace, _) = state
-                .database
-                .ensure_personal_workspace(token.user_id)
-                .await?;
-            Ok(McpScope {
-                knowledge_bases: state.database.list_knowledge_bases(workspace.id).await?,
-                workspaces: vec![workspace],
-            })
-        }
-        "group" => {
-            let team_id = token
-                .team_id
-                .ok_or_else(|| AppError::Unauthorized("group token has no team".to_string()))?;
-            if state
-                .database
-                .team_member_role(team_id, token.user_id)
-                .await?
-                .is_none()
-            {
-                return Err(AppError::Unauthorized(
-                    "token owner is no longer a team member".to_string(),
-                ));
-            }
-            let team = state
-                .database
-                .get_team(team_id)
-                .await?
-                .ok_or_else(|| AppError::NotFound("team not found".to_string()))?;
-            let workspace = state
-                .database
-                .get_workspace(team.workspace_id)
-                .await?
-                .ok_or_else(|| AppError::NotFound("team workspace not found".to_string()))?;
-            Ok(McpScope {
-                knowledge_bases: state.database.list_knowledge_bases(workspace.id).await?,
-                workspaces: vec![workspace],
-            })
-        }
-        "all" => mcp_scope_for_user(state, token.user_id).await,
-        _ => Err(AppError::Unauthorized("unknown MCP scope".to_string())),
+    if !state
+        .database
+        .user_can_access_workspace(user_id, workspace_id)
+        .await?
+    {
+        return Err(AppError::Forbidden("workspace access denied".to_string()));
     }
+    let workspace = state
+        .database
+        .get_workspace(workspace_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("workspace not found".to_string()))?;
+    let valid_scope = matches!(
+        (scope_name, workspace.kind),
+        ("user", WorkspaceKind::Personal) | ("group", WorkspaceKind::Team)
+    );
+    if !valid_scope {
+        return Err(AppError::BadRequest(
+            "MCP scope does not match workspace kind".to_string(),
+        ));
+    }
+    Ok(McpScope {
+        knowledge_bases: state.database.list_knowledge_bases(workspace.id).await?,
+        workspaces: vec![workspace],
+    })
 }
 
 fn mcp_tools() -> Value {

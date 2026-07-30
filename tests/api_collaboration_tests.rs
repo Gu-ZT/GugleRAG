@@ -161,11 +161,77 @@ async fn collaboration_and_scoped_mcp_flow_works() {
         "POST",
         "/api/mcp/configs",
         Some(&alice_token),
-        Some(json!({ "scope": "group", "team_id": team["id"] })),
+        Some(json!({ "scope": "group", "workspace_id": team_workspace_id })),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(mcp["type"], "streamable-http");
+    assert!(
+        mcp["url"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("/mcp/group/{team_workspace_id}"))
+    );
+    assert_eq!(
+        mcp["headers"]["Authorization"],
+        format!("Bearer {alice_token}")
+    );
+    let (status, repeated_mcp) = json_request(
+        &app,
+        "POST",
+        "/api/mcp/configs",
+        Some(&alice_token),
+        Some(json!({ "scope": "group", "workspace_id": team_workspace_id })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(repeated_mcp, mcp);
+
+    let (status, all_mcp) = json_request(
+        &app,
+        "POST",
+        "/api/mcp/configs",
+        Some(&alice_token),
+        Some(json!({ "scope": "all" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(all_mcp["url"].as_str().unwrap().ends_with("/mcp/all"));
+    assert_eq!(
+        all_mcp["headers"]["Authorization"],
+        format!("Bearer {alice_token}")
+    );
+    let all_mcp_path = url_path(all_mcp["url"].as_str().unwrap());
+    let (_, rpc) = json_request(
+        &app,
+        "POST",
+        &all_mcp_path,
+        Some(&alice_token),
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": { "name": "list_workspaces", "arguments": {} }
+        })),
+    )
+    .await;
+    let all_workspaces = mcp_text_json(&rpc);
+    assert_eq!(all_workspaces.as_array().unwrap().len(), 2);
+    assert!(
+        all_workspaces
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|workspace| workspace["id"] == personal_workspace["id"])
+    );
+    assert!(
+        all_workspaces
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|workspace| workspace["id"] == team_workspace_id)
+    );
+
     let mcp_path = url_path(mcp["url"].as_str().unwrap());
     let mcp_bearer = mcp["headers"]["Authorization"]
         .as_str()

@@ -1,6 +1,6 @@
 use crate::{
     AppState, auth,
-    domain::{KnowledgeBase, Team, TeamInvitation, TeamMember, TeamRole, Workspace},
+    domain::{KnowledgeBase, Team, TeamInvitation, TeamMember, TeamRole, Workspace, WorkspaceKind},
     error::AppError,
 };
 use axum::{
@@ -38,7 +38,7 @@ pub(crate) struct InvitationResponse {
 #[derive(Debug, Deserialize)]
 pub(crate) struct McpConfigRequest {
     scope: String,
-    team_id: Option<Uuid>,
+    workspace_id: Option<Uuid>,
 }
 
 #[derive(Debug, Serialize)]
@@ -205,21 +205,36 @@ pub(crate) async fn create_mcp_config(
     Json(input): Json<McpConfigRequest>,
 ) -> Result<Json<McpConfigResponse>, AppError> {
     let user_id = auth::require_user(&headers, &state).await?;
-    let team_id = match input.scope.as_str() {
-        "user" | "all" => {
-            if input.team_id.is_some() {
+    let login_token = auth::bearer_token(&headers)?;
+    let path = match input.scope.as_str() {
+        "all" => {
+            if input.workspace_id.is_some() {
                 return Err(AppError::BadRequest(
-                    "team_id is only valid for group scope".to_string(),
+                    "workspace_id is not valid for all scope".to_string(),
                 ));
             }
-            None
+            "mcp/all".to_string()
         }
-        "group" => {
-            let team_id = input.team_id.ok_or_else(|| {
-                AppError::BadRequest("team_id is required for group scope".to_string())
+        "user" | "group" => {
+            let workspace_id = input.workspace_id.ok_or_else(|| {
+                AppError::BadRequest(format!(
+                    "workspace_id is required for {} scope",
+                    input.scope
+                ))
             })?;
-            require_team_membership(&state, team_id, user_id).await?;
-            Some(team_id)
+            let workspace = require_workspace_access(&state, user_id, workspace_id).await?;
+            let expected_kind = if input.scope == "user" {
+                WorkspaceKind::Personal
+            } else {
+                WorkspaceKind::Team
+            };
+            if workspace.kind != expected_kind {
+                return Err(AppError::BadRequest(format!(
+                    "workspace_id is not a {} workspace",
+                    input.scope
+                )));
+            }
+            format!("mcp/{}/{workspace_id}", input.scope)
         }
         _ => {
             return Err(AppError::BadRequest(
@@ -227,22 +242,12 @@ pub(crate) async fn create_mcp_config(
             ));
         }
     };
-    let raw_token = Uuid::new_v4().to_string();
-    state
-        .database
-        .create_mcp_token(
-            user_id,
-            &input.scope,
-            team_id,
-            &auth::hash_access_token(&raw_token),
-        )
-        .await?;
     let base_url = mcp_base_url(&state);
     Ok(Json(McpConfigResponse {
         config_type: "streamable-http",
-        url: format!("{base_url}/mcp/{}/{raw_token}", input.scope),
+        url: format!("{base_url}/{path}"),
         headers: McpHeaders {
-            authorization: format!("Bearer {raw_token}"),
+            authorization: format!("Bearer {login_token}"),
         },
     }))
 }

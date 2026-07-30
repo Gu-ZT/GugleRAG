@@ -91,7 +91,7 @@
     - `get_document_metadata(workspace_id, knowledge_base_id, doc_id)` — 获取元数据
 - [x] 工具返回结构符合 MCP 规范（JSON-RPC 响应）
 - [x] 支持通过 MCP 进行用户认证（可配置）
-- [x] 支持个人、团队和全部可访问知识库的独立 MCP 配置
+- [x] MCP 配置复用登录 JWT；个人/团队 URL 使用工作区 ID，`/mcp/all` 访问全部可用工作区
 
 ### 3.6 前端界面（Vue3 + TS）
 

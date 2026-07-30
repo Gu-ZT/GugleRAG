@@ -464,10 +464,20 @@ async function acceptInvitation() {
 
 async function createMcpConfig(scope: "user" | "group" | "all") {
   try {
+    let workspaceId: string | undefined;
+    if (scope === "user") {
+      workspaceId = workspaces.value.find((workspace) => workspace.kind === "personal")?.id;
+    } else if (scope === "group") {
+      workspaceId = selectedWorkspace.value?.id;
+    }
+    if (scope !== "all" && !workspaceId) {
+      toast("error", "未找到对应工作区");
+      return;
+    }
     const config = await request<McpConfig>("/api/mcp/configs", {
       method: "POST",
       headers: authHeaders(),
-      body: JSON.stringify({ scope, team_id: scope === "group" ? selectedTeam.value?.id : undefined })
+      body: JSON.stringify({ scope, workspace_id: workspaceId })
     });
     mcpConfig.value = JSON.stringify(config, null, 2);
     await copyText(mcpConfig.value);
@@ -820,7 +830,7 @@ onUnmounted(() => {
             <span><strong>{{ selectedTeam.name }}</strong><small>访问当前团队工作区的知识库</small></span><Copy :size="16" />
           </button>
           <button class="mcp-scope" @click="createMcpConfig('all')">
-            <span><strong>全部可访问知识库</strong><small>覆盖个人与所有已加入团队</small></span><Copy :size="16" />
+            <span><strong>全部可用工作区</strong><small>访问个人与所有已加入团队的知识库</small></span><Copy :size="16" />
           </button>
           <pre v-if="mcpConfig" class="code-block">{{ mcpConfig }}</pre>
         </div>

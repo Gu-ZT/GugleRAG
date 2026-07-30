@@ -37,11 +37,7 @@ pub(crate) struct AuthResponse {
 }
 
 pub(crate) async fn require_user(headers: &HeaderMap, state: &AppState) -> Result<Uuid, AppError> {
-    let token = headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .ok_or_else(|| AppError::Unauthorized("missing bearer token".to_string()))?;
+    let token = bearer_token(headers)?;
     let token = decode::<Claims>(
         token,
         &DecodingKey::from_secret(state.config.jwt_secret.as_bytes()),
@@ -53,6 +49,14 @@ pub(crate) async fn require_user(headers: &HeaderMap, state: &AppState) -> Resul
         .sub
         .parse()
         .map_err(|_| AppError::Unauthorized("invalid token subject".to_string()))
+}
+
+pub(crate) fn bearer_token(headers: &HeaderMap) -> Result<&str, AppError> {
+    headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .ok_or_else(|| AppError::Unauthorized("missing bearer token".to_string()))
 }
 
 pub(crate) fn issue_token(user_id: Uuid, secret: &str) -> Result<String, AppError> {

@@ -17,7 +17,7 @@
 - Keep Markdown preview on `markdown-it` with raw HTML disabled and sanitize rendered output with DOMPurify.
 - Keep the workspace usable through normal account flows; do not require users to paste bearer tokens manually in the UI.
 - Users have one personal workspace and may belong to multiple team workspaces. Knowledge bases are the document ownership boundary; document and search APIs must enforce knowledge-base access through workspace membership.
-- Scoped MCP URLs are `/mcp/user/<token>`, `/mcp/group/<token>`, and `/mcp/all/<token>`. Validate both the path token and Bearer token, and keep MCP token values hashed at rest.
+- MCP configs reuse the current login JWT. Workspace-scoped URLs are `/mcp/user/<workspace_id>` and `/mcp/group/<workspace_id>`; `/mcp/all` has no resource ID and covers every workspace available to the user. Do not create separate MCP credentials when copying a config.
 - MCP exposes workspace and knowledge-base discovery tools. Every document/search MCP tool must require and validate both `workspace_id` and `knowledge_base_id` before touching a document.
 - Keep `MCP_PUBLIC_URL` available for deployments where `SERVER_HOST` is a wildcard address or the service is behind a reverse proxy.
 - Keep `src/main.rs` as a thin executable entry point. Backend composition belongs in `src/lib.rs`; configuration, persistence, domain models, authentication, REST APIs, MCP, and search belong in their dedicated modules.

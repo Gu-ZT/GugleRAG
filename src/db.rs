@@ -1,7 +1,7 @@
 use crate::{
     domain::{
-        Document, DocumentVersion, KnowledgeBase, McpToken, Team, TeamInvitation, TeamMember,
-        TeamRole, User, Workspace, WorkspaceKind, parse_role, role_to_str,
+        Document, DocumentVersion, KnowledgeBase, Team, TeamInvitation, TeamMember, TeamRole, User,
+        Workspace, WorkspaceKind, parse_role, role_to_str,
     },
     error::AppError,
 };
@@ -91,19 +91,6 @@ impl Database {
                 token_hash VARCHAR(128) NOT NULL UNIQUE,
                 status VARCHAR(16) NOT NULL,
                 created_at VARCHAR(40) NOT NULL
-            )",
-        )
-        .execute(&self.pool)
-        .await?;
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS mcp_tokens (
-                id VARCHAR(36) PRIMARY KEY,
-                user_id VARCHAR(36) NOT NULL,
-                scope VARCHAR(16) NOT NULL,
-                team_id VARCHAR(36),
-                token_hash VARCHAR(128) NOT NULL UNIQUE,
-                created_at VARCHAR(40) NOT NULL,
-                revoked_at VARCHAR(40)
             )",
         )
         .execute(&self.pool)
@@ -607,51 +594,6 @@ impl Database {
             .ok_or_else(|| AppError::NotFound("team not found".to_string()))
     }
 
-    pub(crate) async fn create_mcp_token(
-        &self,
-        user_id: Uuid,
-        scope: &str,
-        team_id: Option<Uuid>,
-        token_hash: &str,
-    ) -> Result<McpToken, AppError> {
-        let token = McpToken {
-            id: Uuid::new_v4(),
-            user_id,
-            scope: scope.to_string(),
-            team_id,
-            created_at: Utc::now(),
-        };
-        sqlx::query(
-            "INSERT INTO mcp_tokens
-             (id, user_id, scope, team_id, token_hash, created_at, revoked_at)
-             VALUES (?, ?, ?, ?, ?, ?, NULL)",
-        )
-        .bind(token.id.to_string())
-        .bind(user_id.to_string())
-        .bind(scope)
-        .bind(team_id.map(|id| id.to_string()))
-        .bind(token_hash)
-        .bind(token.created_at.to_rfc3339())
-        .execute(&self.pool)
-        .await?;
-        Ok(token)
-    }
-
-    pub(crate) async fn find_mcp_token(
-        &self,
-        token_hash: &str,
-    ) -> Result<Option<McpToken>, AppError> {
-        sqlx::query(
-            "SELECT id, user_id, scope, team_id, created_at FROM mcp_tokens
-             WHERE token_hash = ? AND revoked_at IS NULL",
-        )
-        .bind(token_hash)
-        .fetch_optional(&self.pool)
-        .await?
-        .map(row_to_mcp_token)
-        .transpose()
-    }
-
     pub(crate) async fn list_documents(
         &self,
         parent_id: Option<Uuid>,
@@ -940,19 +882,6 @@ fn row_to_invitation(row: sqlx::any::AnyRow) -> Result<TeamInvitation, AppError>
         inviter_id: parse_uuid_str(row.try_get("inviter_id")?)?,
         invitee_id: parse_uuid_str(row.try_get("invitee_id")?)?,
         status: row.try_get("status")?,
-        created_at: parse_datetime_str(row.try_get("created_at")?)?,
-    })
-}
-
-fn row_to_mcp_token(row: sqlx::any::AnyRow) -> Result<McpToken, AppError> {
-    Ok(McpToken {
-        id: parse_uuid_str(row.try_get("id")?)?,
-        user_id: parse_uuid_str(row.try_get("user_id")?)?,
-        scope: row.try_get("scope")?,
-        team_id: row
-            .try_get::<Option<String>, _>("team_id")?
-            .map(parse_uuid_str)
-            .transpose()?,
         created_at: parse_datetime_str(row.try_get("created_at")?)?,
     })
 }

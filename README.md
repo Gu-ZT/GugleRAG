@@ -23,7 +23,7 @@ GugleRAG is a self-hosted team knowledge base with Markdown documents, REST APIs
 └── AGENTS.md            # Agent/developer working notes
 ```
 
-The backend stores users, workspaces, teams, memberships, knowledge bases, documents, versions, invitations, and scoped MCP tokens through SQLx. Runtime configuration accepts SQLite, MySQL, and PostgreSQL `DATABASE_URL` values.
+The backend stores users, workspaces, teams, memberships, knowledge bases, documents, versions, and invitations through SQLx. Runtime configuration accepts SQLite, MySQL, and PostgreSQL `DATABASE_URL` values.
 
 ## First Run
 
@@ -94,7 +94,8 @@ Useful endpoints:
 - `GET/PUT/DELETE /api/documents/{id}`
 - `GET /api/search?q=...`
 - `POST /mcp`
-- `POST /mcp/{user|group|all}/{scoped_token}`
+- `POST /mcp/all`
+- `POST /mcp/{user|group}/{workspace_id}`
 
 ## Collaboration and MCP
 
@@ -104,34 +105,35 @@ In the Vue workspace, use the selector at the top-left to switch between persona
 
 Documents belong to a knowledge base. Document and search requests accept `knowledge_base_id`; when it is omitted, the personal default knowledge base is used for backward compatibility.
 
-The Vue workspace generates and copies three independent MCP configurations through `POST /api/mcp/configs`:
+The Vue workspace generates and copies stable MCP configurations through `POST /api/mcp/configs`. Personal and team configurations identify a workspace explicitly:
 
 ```json
 {
-  "scope": "user"
+  "scope": "user",
+  "workspace_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 }
 ```
 
-Use `scope: "group"` with a `team_id` for one team workspace, or `scope: "all"` for every knowledge base the account can access. The response follows the requested streamable HTTP shape:
+Use `scope: "group"` with a team `workspace_id`, or `scope: "all"` without `workspace_id` for every workspace the account can access. The response follows the requested streamable HTTP shape:
 
 ```json
 {
   "type": "streamable-http",
   "url": "http://127.0.0.1:8080/mcp/user/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
   "headers": {
-    "Authorization": "Bearer xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    "Authorization": "Bearer eyJhbGciOiJIUzI1NiJ9..."
   }
 }
 ```
 
-Scoped MCP tokens are stored hashed in the database. The URL token and Bearer token must match, and access is checked again on every request. Set `MCP_PUBLIC_URL` when the server is behind a public hostname or reverse proxy.
+The UUID at the end of a personal or group URL is the workspace ID, not an access token. The all-workspaces URL is `/mcp/all` and has no trailing ID. Authorization reuses the user's current login JWT, so copying the same configuration repeatedly does not create or rotate credentials. JWT expiry and logout behavior remain the same as the normal account session, and workspace access is checked again on every MCP request. Set `MCP_PUBLIC_URL` when the server is behind a public hostname or reverse proxy.
 
 MCP clients can discover resources before operating on documents:
 
 - `list_workspaces()` returns the workspaces visible to the current MCP scope.
 - `list_knowledge_bases(workspace_id)` returns the visible knowledge bases in that workspace.
 
-Every document tool uses an explicit resource context. `search_knowledge`, `read_document`, `create_document`, `update_document`, `list_documents`, and `get_document_metadata` all require both `workspace_id` and `knowledge_base_id`; document-specific tools additionally require their existing `doc_id`, `folder_id`, or content fields. The server verifies that the knowledge base belongs to the workspace, both resources are inside the MCP token scope, and the target document belongs to that knowledge base.
+Every document tool uses an explicit resource context. `search_knowledge`, `read_document`, `create_document`, `update_document`, `list_documents`, and `get_document_metadata` all require both `workspace_id` and `knowledge_base_id`; document-specific tools additionally require their existing `doc_id`, `folder_id`, or content fields. The server verifies that the knowledge base belongs to the workspace, both resources are available to the authenticated user, and the target document belongs to that knowledge base.
 
 ```json
 {

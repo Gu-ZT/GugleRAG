@@ -65,15 +65,6 @@ pub struct KnowledgeBase {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct McpToken {
-    pub id: Uuid,
-    pub user_id: Uuid,
-    pub scope: String,
-    pub team_id: Option<Uuid>,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct User {
     pub id: Uuid,
     pub username: String,
