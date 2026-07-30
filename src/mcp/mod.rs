@@ -389,8 +389,12 @@ async fn call_mcp_tool(
                     .get_document(parent_id)
                     .await
                     .map_err(|e| e.to_string())?;
-                if !matches!(parent, Some(ref doc) if doc.knowledge_base_id == knowledge_base_id) {
-                    return Err("parent_id must exist in the same knowledge base".to_string());
+                if !matches!(parent, Some(ref doc) if doc.knowledge_base_id == knowledge_base_id && doc.is_folder)
+                {
+                    return Err(
+                        "parent_id must be an existing folder in the same knowledge base"
+                            .to_string(),
+                    );
                 }
             }
             let now = Utc::now();
@@ -404,6 +408,7 @@ async fn call_mcp_tool(
                     .unwrap_or_default()
                     .to_string(),
                 parent_id,
+                is_folder: false,
                 tags: Vec::new(),
                 author_id,
                 created_at: now,
@@ -435,6 +440,9 @@ async fn call_mcp_tool(
                 doc.title = title.trim().to_string();
             }
             if let Some(content) = args.get("content").and_then(Value::as_str) {
+                if doc.is_folder {
+                    return Err("folders cannot have content".to_string());
+                }
                 let version = DocumentVersion {
                     content: doc.content.clone(),
                     saved_at: Utc::now(),
@@ -467,6 +475,9 @@ async fn call_mcp_tool(
                     .map_err(|e| e.to_string())?
                     .ok_or_else(|| "folder_id not found".to_string())?;
                 require_document_knowledge_base(&folder, knowledge_base_id)?;
+                if !folder.is_folder {
+                    return Err("folder_id must refer to a folder".to_string());
+                }
             }
             let docs = state
                 .database
@@ -627,6 +638,7 @@ fn document_metadata(doc: &Document, workspace_id: Uuid) -> Value {
         "knowledge_base_id": doc.knowledge_base_id,
         "title": doc.title,
         "parent_id": doc.parent_id,
+        "is_folder": doc.is_folder,
         "tags": doc.tags,
         "author_id": doc.author_id,
         "created_at": doc.created_at,

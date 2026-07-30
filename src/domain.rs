@@ -107,6 +107,7 @@ pub struct Document {
     pub title: String,
     pub content: String,
     pub parent_id: Option<Uuid>,
+    pub is_folder: bool,
     pub tags: Vec<String>,
     pub author_id: Uuid,
     pub created_at: DateTime<Utc>,

@@ -7,6 +7,9 @@ import {
   Copy,
   FilePlus2,
   FileText,
+  Folder,
+  FolderOpen,
+  FolderPlus,
   LogIn,
   LogOut,
   Menu,
@@ -14,6 +17,8 @@ import {
   Plug,
   Search,
   Settings,
+  Trash2,
+  Upload,
   UserPlus,
   Users,
   X
@@ -31,7 +36,8 @@ import type {
   Team,
   TeamInvitation,
   TeamMember,
-  Workspace
+  Workspace,
+  ZipImportResult
 } from "../types";
 
 const activeDoc = ref<DocumentItem | null>(null);
@@ -42,7 +48,7 @@ const editorMode = ref<"edit" | "preview">("edit");
 const sidebarOpen = ref(false);
 const workspaceMenuOpen = ref(false);
 const adminSettingsOpen = ref(false);
-const activeDialog = ref<"create-team" | "invite-member" | "join-team" | "create-knowledge-base" | "mcp" | null>(null);
+const activeDialog = ref<"create-team" | "invite-member" | "join-team" | "create-knowledge-base" | "create-folder" | "mcp" | null>(null);
 const query = ref("");
 const authError = ref("");
 
@@ -50,6 +56,9 @@ const workspaces = ref<Workspace[]>([]);
 const knowledgeBases = ref<KnowledgeBase[]>([]);
 const documentsByKnowledgeBase = ref<Record<string, DocumentItem[]>>({});
 const expandedKnowledgeBaseIds = ref<Set<string>>(new Set());
+const expandedFolderIds = ref<Set<string>>(new Set());
+const zipInput = ref<HTMLInputElement | null>(null);
+const zipKnowledgeBaseId = ref("");
 const teams = ref<Team[]>([]);
 const teamMembers = ref<TeamMember[]>([]);
 const invitations = ref<TeamInvitation[]>([]);
@@ -61,6 +70,17 @@ const lastInviteToken = ref("");
 const authForm = reactive({ username: "", password: "", display_name: "" });
 const editor = reactive({ title: "", content: "", tags: "" });
 const collaborationForm = reactive({ teamName: "", knowledgeBaseName: "", inviteUsername: "", inviteToken: "" });
+const folderForm = reactive<{ name: string; knowledgeBaseId: string; parentId: string | null }>({
+  name: "",
+  knowledgeBaseId: "",
+  parentId: null
+});
+
+interface TreeRow {
+  document: DocumentItem;
+  depth: number;
+  hasChildren: boolean;
+}
 
 interface Toast {
   id: number;
@@ -93,8 +113,18 @@ const pendingInvitations = computed(() =>
   invitations.value.filter((item) => item.status === "pending")
 );
 const totalDocumentCount = computed(() =>
-  Object.values(documentsByKnowledgeBase.value).reduce((total, items) => total + items.length, 0)
+  Object.values(documentsByKnowledgeBase.value).reduce(
+    (total, items) => total + items.filter((item) => !item.is_folder).length,
+    0
+  )
 );
+const treeRowsByKnowledgeBase = computed<Record<string, TreeRow[]>>(() => {
+  const rows: Record<string, TreeRow[]> = {};
+  for (const knowledgeBase of knowledgeBases.value) {
+    rows[knowledgeBase.id] = buildTreeRows(documentsByKnowledgeBase.value[knowledgeBase.id] ?? []);
+  }
+  return rows;
+});
 
 const dirty = computed(() => {
   if (!activeDoc.value) return false;
@@ -109,6 +139,49 @@ const previewHtml = computed(() => renderMarkdown(editor.content));
 const tagChips = computed(() =>
   editor.tags.split(",").map((tag) => tag.trim()).filter(Boolean)
 );
+
+function buildTreeRows(documents: DocumentItem[]): TreeRow[] {
+  const folderIds = new Set(documents.filter((document) => document.is_folder).map((document) => document.id));
+  const documentsByParent = new Map<string | null, DocumentItem[]>();
+  for (const document of documents) {
+    const parentId = document.parent_id && folderIds.has(document.parent_id) ? document.parent_id : null;
+    const siblings = documentsByParent.get(parentId) ?? [];
+    siblings.push(document);
+    documentsByParent.set(parentId, siblings);
+  }
+  const sortDocuments = (items: DocumentItem[]) =>
+    [...items].sort(
+      (left, right) =>
+        Number(right.is_folder) - Number(left.is_folder) ||
+        left.title.localeCompare(right.title, "zh-CN", { sensitivity: "base" })
+    );
+  const rows: TreeRow[] = [];
+  const visited = new Set<string>();
+  const visit = (parentId: string | null, depth: number) => {
+    for (const document of sortDocuments(documentsByParent.get(parentId) ?? [])) {
+      if (visited.has(document.id)) continue;
+      visited.add(document.id);
+      const hasChildren = (documentsByParent.get(document.id) ?? []).length > 0;
+      rows.push({ document, depth, hasChildren });
+      if (document.is_folder && expandedFolderIds.value.has(document.id)) {
+        visit(document.id, depth + 1);
+      }
+    }
+  };
+  visit(null, 0);
+  for (const document of sortDocuments(documents.filter((item) => !visited.has(item.id)))) {
+    rows.push({
+      document,
+      depth: 0,
+      hasChildren: (documentsByParent.get(document.id) ?? []).length > 0
+    });
+  }
+  return rows;
+}
+
+function firstFile(documents: DocumentItem[]): DocumentItem | undefined {
+  return documents.find((document) => !document.is_folder);
+}
 
 /* 编辑区随内容自动长高，避免页面与输入框双重滚动条 */
 const editorArea = ref<HTMLTextAreaElement | null>(null);
@@ -198,6 +271,7 @@ async function loadKnowledgeBases() {
   activeDoc.value = null;
   documentsByKnowledgeBase.value = {};
   expandedKnowledgeBaseIds.value = new Set();
+  expandedFolderIds.value = new Set();
   teamMembers.value = [];
   if (!selectedWorkspaceId.value) return;
   localStorage.setItem("guglerag.workspace", selectedWorkspaceId.value);
@@ -238,7 +312,8 @@ async function selectKnowledgeBase(knowledgeBaseId: string, openFirst = false, e
     ]);
   }
   const documents = documentsByKnowledgeBase.value[knowledgeBaseId] ?? [];
-  if (openFirst && documents.length > 0) await openDocument(documents[0].id, knowledgeBaseId);
+  const firstDocument = firstFile(documents);
+  if (openFirst && firstDocument) await openDocument(firstDocument.id, knowledgeBaseId);
 }
 
 async function loadAllDocuments(openSelectedFirst = true) {
@@ -247,7 +322,7 @@ async function loadAllDocuments(openSelectedFirst = true) {
     knowledgeBases.value.map(async (knowledgeBase) => {
       try {
         const documents = await request<DocumentItem[]>(
-          `/api/documents?knowledge_base_id=${knowledgeBase.id}`,
+          `/api/documents?knowledge_base_id=${knowledgeBase.id}&tree=true`,
           { headers: authHeaders() }
         );
         return [knowledgeBase.id, documents] as const;
@@ -261,8 +336,9 @@ async function loadAllDocuments(openSelectedFirst = true) {
   if (failed) toast("error", "部分知识库暂时无法读取");
   if (!openSelectedFirst || !selectedKnowledgeBaseId.value) return;
   const selectedDocuments = documentsByKnowledgeBase.value[selectedKnowledgeBaseId.value] ?? [];
-  if (selectedDocuments.length > 0) {
-    await openDocument(selectedDocuments[0].id, selectedKnowledgeBaseId.value);
+  const firstDocument = firstFile(selectedDocuments);
+  if (firstDocument) {
+    await openDocument(firstDocument.id, selectedKnowledgeBaseId.value);
   }
 }
 
@@ -270,14 +346,15 @@ async function loadDocuments(knowledgeBaseId = selectedKnowledgeBaseId.value, op
   if (!knowledgeBaseId) return;
   try {
     const documents = await request<DocumentItem[]>(
-      `/api/documents?knowledge_base_id=${knowledgeBaseId}`,
+      `/api/documents?knowledge_base_id=${knowledgeBaseId}&tree=true`,
       { headers: authHeaders() }
     );
     documentsByKnowledgeBase.value = {
       ...documentsByKnowledgeBase.value,
       [knowledgeBaseId]: documents
     };
-    if (openFirst && documents.length > 0) await openDocument(documents[0].id, knowledgeBaseId);
+    const firstDocument = firstFile(documents);
+    if (openFirst && firstDocument) await openDocument(firstDocument.id, knowledgeBaseId);
   } catch (err) {
     toast("error", errorMessage(err, "无法读取文档"));
   }
@@ -304,6 +381,8 @@ async function searchDocuments() {
             knowledge_base_id: knowledgeBase.id,
             title: item.title,
             content: item.excerpt,
+            parent_id: null,
+            is_folder: false,
             tags: [],
             updated_at: item.updated_at
           }))
@@ -315,6 +394,7 @@ async function searchDocuments() {
     expandedKnowledgeBaseIds.value = new Set(
       entries.filter(([, documents]) => documents.length > 0).map(([id]) => id)
     );
+    expandedFolderIds.value = new Set();
   } catch (err) {
     toast("error", errorMessage(err, "搜索失败"));
   }
@@ -323,6 +403,11 @@ async function searchDocuments() {
 async function openDocument(id: string, knowledgeBaseId?: string, mode: "edit" | "preview" = "preview") {
   try {
     activeDoc.value = await request<DocumentItem>(`/api/documents/${id}`, { headers: authHeaders() });
+    if (activeDoc.value.is_folder) {
+      activeDoc.value = null;
+      toast("error", "目录不能在编辑器中打开");
+      return;
+    }
     const ownerId = knowledgeBaseId ?? activeDoc.value.knowledge_base_id;
     selectedKnowledgeBaseId.value = ownerId;
     if (selectedWorkspaceId.value) {
@@ -338,7 +423,7 @@ async function openDocument(id: string, knowledgeBaseId?: string, mode: "edit" |
   }
 }
 
-async function createDocument(knowledgeBaseId = selectedKnowledgeBaseId.value) {
+async function createDocument(knowledgeBaseId = selectedKnowledgeBaseId.value, parentId: string | null = null) {
   if (!knowledgeBaseId) return;
   try {
     const created = await request<DocumentItem>("/api/documents", {
@@ -348,18 +433,103 @@ async function createDocument(knowledgeBaseId = selectedKnowledgeBaseId.value) {
         knowledge_base_id: knowledgeBaseId,
         title: "未命名文档",
         content: "# 未命名文档\n\n开始记录知识。",
+        parent_id: parentId,
         tags: []
       })
     });
-    documentsByKnowledgeBase.value = {
-      ...documentsByKnowledgeBase.value,
-      [knowledgeBaseId]: [created, ...(documentsByKnowledgeBase.value[knowledgeBaseId] ?? [])]
-    };
+    await loadDocuments(knowledgeBaseId);
     expandedKnowledgeBaseIds.value = new Set([...expandedKnowledgeBaseIds.value, knowledgeBaseId]);
+    if (parentId) {
+      expandedFolderIds.value = new Set([...expandedFolderIds.value, parentId]);
+    }
     await openDocument(created.id, knowledgeBaseId, "edit");
     toast("success", "已创建文档。");
   } catch (err) {
     toast("error", errorMessage(err, "创建文档失败"));
+  }
+}
+
+function openCreateFolder(knowledgeBaseId = selectedKnowledgeBaseId.value, parentId: string | null = null) {
+  if (!knowledgeBaseId) return;
+  folderForm.name = "";
+  folderForm.knowledgeBaseId = knowledgeBaseId;
+  folderForm.parentId = parentId;
+  openDialog("create-folder");
+}
+
+async function createFolder() {
+  const name = folderForm.name.trim();
+  if (!name || !folderForm.knowledgeBaseId) return;
+  try {
+    const knowledgeBaseId = folderForm.knowledgeBaseId;
+    const parentId = folderForm.parentId;
+    await request<DocumentItem>("/api/documents", {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        knowledge_base_id: knowledgeBaseId,
+        title: name,
+        parent_id: parentId,
+        is_folder: true
+      })
+    });
+    await loadDocuments(knowledgeBaseId);
+    await selectKnowledgeBase(knowledgeBaseId, false);
+    expandedKnowledgeBaseIds.value = new Set([...expandedKnowledgeBaseIds.value, knowledgeBaseId]);
+    if (parentId) {
+      expandedFolderIds.value = new Set([...expandedFolderIds.value, parentId]);
+    }
+    closeDialog();
+    toast("success", "已创建目录。");
+  } catch (err) {
+    toast("error", errorMessage(err, "创建目录失败"));
+  }
+}
+
+function chooseZipImport(knowledgeBaseId: string) {
+  zipKnowledgeBaseId.value = knowledgeBaseId;
+  zipInput.value?.click();
+}
+
+async function importZip(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const archive = input.files?.[0];
+  const knowledgeBaseId = zipKnowledgeBaseId.value;
+  if (!archive || !knowledgeBaseId) return;
+  if (archive.size > 10 * 1024 * 1024) {
+    input.value = "";
+    toast("error", "ZIP 文件不能超过 10 MB");
+    return;
+  }
+  try {
+    const formData = new FormData();
+    formData.append("archive", archive);
+    const result = await request<ZipImportResult>(
+      `/api/knowledge-bases/${knowledgeBaseId}/import-zip`,
+      {
+        method: "POST",
+        headers: authHeaders(),
+        body: formData
+      }
+    );
+    await loadDocuments(knowledgeBaseId);
+    await selectKnowledgeBase(knowledgeBaseId, false);
+    expandedKnowledgeBaseIds.value = new Set([...expandedKnowledgeBaseIds.value, knowledgeBaseId]);
+    const importedFolders = (documentsByKnowledgeBase.value[knowledgeBaseId] ?? [])
+      .filter((document) => document.is_folder)
+      .map((document) => document.id);
+    expandedFolderIds.value = new Set([...expandedFolderIds.value, ...importedFolders]);
+    const details = [
+      `已导入 ${result.imported_files} 个文本文件`,
+      result.created_folders ? `创建 ${result.created_folders} 个目录` : "",
+      result.skipped_entries ? `跳过 ${result.skipped_entries} 项` : ""
+    ].filter(Boolean);
+    toast("success", `${details.join("，")}。`);
+  } catch (err) {
+    toast("error", errorMessage(err, "导入 ZIP 失败"));
+  } finally {
+    input.value = "";
+    zipKnowledgeBaseId.value = "";
   }
 }
 
@@ -398,6 +568,23 @@ async function deleteDocument() {
     toast("success", "文档已删除。");
   } catch (err) {
     toast("error", errorMessage(err, "删除失败"));
+  }
+}
+
+async function deleteFolder(document: DocumentItem) {
+  if (!window.confirm(`删除目录“${document.title}”及其全部内容？`)) return;
+  try {
+    await request(`/api/documents/${document.id}`, {
+      method: "DELETE",
+      headers: authHeaders()
+    });
+    if (activeDoc.value?.knowledge_base_id === document.knowledge_base_id) {
+      activeDoc.value = null;
+    }
+    await loadDocuments(document.knowledge_base_id);
+    toast("success", "目录及其内容已删除。");
+  } catch (err) {
+    toast("error", errorMessage(err, "删除目录失败"));
   }
 }
 
@@ -520,6 +707,15 @@ function toggleKnowledgeBase(knowledgeBaseId: string) {
   expandedKnowledgeBaseIds.value = next;
 }
 
+function toggleFolder(document: DocumentItem, knowledgeBaseId: string) {
+  if (!document.is_folder) return;
+  const next = new Set(expandedFolderIds.value);
+  if (next.has(document.id)) next.delete(document.id);
+  else next.add(document.id);
+  expandedFolderIds.value = next;
+  selectKnowledgeBase(knowledgeBaseId, false, false);
+}
+
 function openDialog(dialog: NonNullable<typeof activeDialog.value>) {
   workspaceMenuOpen.value = false;
   lastInviteToken.value = "";
@@ -536,6 +732,8 @@ function logout() {
   token.value = "";
   user.value = null;
   documentsByKnowledgeBase.value = {};
+  expandedFolderIds.value = new Set();
+  zipKnowledgeBaseId.value = "";
   workspaces.value = [];
   knowledgeBases.value = [];
   activeDoc.value = null;
@@ -583,6 +781,7 @@ onUnmounted(() => {
   <div class="toast-stack" aria-live="polite">
     <div v-for="item in toasts" :key="item.id" class="toast" :class="item.kind">{{ item.message }}</div>
   </div>
+  <input ref="zipInput" class="zip-import-input" type="file" accept=".zip,application/zip" @change="importZip" />
 
   <!-- 登录 / 注册 -->
   <main v-if="!user" class="auth-screen">
@@ -674,29 +873,89 @@ onUnmounted(() => {
                   <span>{{ knowledgeBase.name }}</span>
                   <small>{{ documentsByKnowledgeBase[knowledgeBase.id]?.length ?? 0 }}</small>
                 </button>
-                <button
-                  class="knowledge-add-btn"
-                  title="在此知识库中新建文章"
-                  aria-label="在此知识库中新建文章"
-                  @click="createDocument(knowledgeBase.id)"
-                >
-                  <Plus :size="14" />
-                </button>
+                <div class="knowledge-actions">
+                  <button
+                    class="knowledge-action-btn"
+                    title="在此知识库中新建文章"
+                    aria-label="在此知识库中新建文章"
+                    @click.stop="createDocument(knowledgeBase.id)"
+                  >
+                    <FilePlus2 :size="14" />
+                  </button>
+                  <button
+                    class="knowledge-action-btn"
+                    title="在此知识库中新建目录"
+                    aria-label="在此知识库中新建目录"
+                    @click.stop="openCreateFolder(knowledgeBase.id)"
+                  >
+                    <FolderPlus :size="14" />
+                  </button>
+                  <button
+                    class="knowledge-action-btn"
+                    title="导入 ZIP 文件"
+                    aria-label="导入 ZIP 文件"
+                    @click.stop="chooseZipImport(knowledgeBase.id)"
+                  >
+                    <Upload :size="14" />
+                  </button>
+                </div>
               </div>
 
               <div v-if="expandedKnowledgeBaseIds.has(knowledgeBase.id)" class="article-list">
-                <button
-                  v-for="doc in documentsByKnowledgeBase[knowledgeBase.id] ?? []"
-                  :key="doc.id"
-                  class="article-item"
-                  :class="{ active: activeDoc?.id === doc.id }"
-                  @click="openDocument(doc.id, knowledgeBase.id)"
+                <div
+                  v-for="row in treeRowsByKnowledgeBase[knowledgeBase.id] ?? []"
+                  :key="row.document.id"
+                  class="tree-item"
+                  :style="{ paddingLeft: `${row.depth * 15}px` }"
                 >
-                  <FileText :size="14" />
-                  <span>{{ doc.title }}</span>
-                  <small>{{ formatTime(doc.updated_at) }}</small>
-                </button>
-                <p v-if="!(documentsByKnowledgeBase[knowledgeBase.id]?.length)" class="article-empty">暂无文章</p>
+                  <button
+                    class="article-item"
+                    :class="{ active: activeDoc?.id === row.document.id, folder: row.document.is_folder }"
+                    :aria-expanded="row.document.is_folder ? expandedFolderIds.has(row.document.id) : undefined"
+                    @click="row.document.is_folder ? toggleFolder(row.document, knowledgeBase.id) : openDocument(row.document.id, knowledgeBase.id)"
+                  >
+                    <ChevronDown
+                      v-if="row.document.is_folder && row.hasChildren && expandedFolderIds.has(row.document.id)"
+                      class="tree-disclosure"
+                      :size="13"
+                    />
+                    <ChevronRight
+                      v-else-if="row.document.is_folder && row.hasChildren"
+                      class="tree-disclosure"
+                      :size="13"
+                    />
+                    <span v-else class="tree-disclosure" aria-hidden="true" />
+                    <FolderOpen v-if="row.document.is_folder && expandedFolderIds.has(row.document.id)" :size="14" />
+                    <Folder v-else-if="row.document.is_folder" :size="14" />
+                    <FileText v-else :size="14" />
+                    <span class="article-title">{{ row.document.title }}</span>
+                    <small v-if="!row.document.is_folder">{{ formatTime(row.document.updated_at) }}</small>
+                  </button>
+                  <div v-if="row.document.is_folder" class="tree-item-actions">
+                    <button
+                      title="在此目录中新建文章"
+                      aria-label="在此目录中新建文章"
+                      @click.stop="createDocument(knowledgeBase.id, row.document.id)"
+                    >
+                      <FilePlus2 :size="13" />
+                    </button>
+                    <button
+                      title="在此目录中新建子目录"
+                      aria-label="在此目录中新建子目录"
+                      @click.stop="openCreateFolder(knowledgeBase.id, row.document.id)"
+                    >
+                      <FolderPlus :size="13" />
+                    </button>
+                    <button
+                      title="删除目录及其内容"
+                      aria-label="删除目录及其内容"
+                      @click.stop="deleteFolder(row.document)"
+                    >
+                      <Trash2 :size="13" />
+                    </button>
+                  </div>
+                </div>
+                <p v-if="!(treeRowsByKnowledgeBase[knowledgeBase.id]?.length)" class="article-empty">暂无文章或目录</p>
               </div>
             </section>
           </div>
@@ -816,6 +1075,7 @@ onUnmounted(() => {
             <h2 v-else-if="activeDialog === 'invite-member'">邀请成员</h2>
             <h2 v-else-if="activeDialog === 'join-team'">加入团队</h2>
             <h2 v-else-if="activeDialog === 'create-knowledge-base'">新建知识库</h2>
+            <h2 v-else-if="activeDialog === 'create-folder'">新建目录</h2>
             <h2 v-else>MCP 配置</h2>
           </div>
           <button class="dialog-close" title="关闭" aria-label="关闭" @click="closeDialog"><X :size="18" /></button>
@@ -863,6 +1123,15 @@ onUnmounted(() => {
           <footer class="dialog-actions">
             <button type="button" class="btn btn-ghost" @click="closeDialog">取消</button>
             <button class="btn btn-primary" :disabled="!collaborationForm.knowledgeBaseName.trim()"><BookOpen :size="16" />创建知识库</button>
+          </footer>
+        </form>
+
+        <form v-else-if="activeDialog === 'create-folder'" class="dialog-form" @submit.prevent="createFolder">
+          <label>目录名称<input v-model="folderForm.name" autofocus placeholder="例如：产品方案" /></label>
+          <p class="hint">{{ folderForm.parentId ? "目录将创建在当前目录中。" : "目录将创建在知识库根目录。" }}</p>
+          <footer class="dialog-actions">
+            <button type="button" class="btn btn-ghost" @click="closeDialog">取消</button>
+            <button class="btn btn-primary" :disabled="!folderForm.name.trim()"><FolderPlus :size="16" />创建目录</button>
           </footer>
         </form>
 

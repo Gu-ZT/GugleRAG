@@ -7,24 +7,56 @@ use crate::{
 };
 use chrono::{DateTime, Utc};
 use sqlx::{AnyPool, Row, any::AnyPoolOptions};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Mutex, OnceLock},
+};
 use uuid::Uuid;
+
+macro_rules! db_query {
+    ($database:expr, $sql:expr $(,)?) => {
+        ::sqlx::query($database.sql($sql))
+    };
+}
+
+static POSTGRES_QUERY_CACHE: OnceLock<Mutex<HashMap<&'static str, &'static str>>> = OnceLock::new();
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SqlDialect {
+    QuestionMark,
+    Postgres,
+}
 
 #[derive(Clone)]
 pub struct Database {
     pub(crate) pool: AnyPool,
+    dialect: SqlDialect,
 }
 
 impl Database {
     pub async fn connect(url: &str) -> Result<Self, AppError> {
+        let dialect = if url.starts_with("postgres://") || url.starts_with("postgresql://") {
+            SqlDialect::Postgres
+        } else {
+            SqlDialect::QuestionMark
+        };
         let pool = AnyPoolOptions::new()
             .max_connections(8)
             .connect(url)
             .await?;
-        Ok(Self { pool })
+        Ok(Self { pool, dialect })
+    }
+
+    fn sql(&self, sql: &'static str) -> &'static str {
+        match self.dialect {
+            SqlDialect::QuestionMark => sql,
+            SqlDialect::Postgres => postgres_sql(sql),
+        }
     }
 
     pub(crate) async fn migrate(&self) -> Result<(), AppError> {
-        sqlx::query(
+        db_query!(
+            self,
             "CREATE TABLE IF NOT EXISTS app_users (
                 id VARCHAR(36) PRIMARY KEY,
                 username VARCHAR(80) NOT NULL UNIQUE,
@@ -37,7 +69,8 @@ impl Database {
         )
         .execute(&self.pool)
         .await?;
-        sqlx::query(
+        db_query!(
+            self,
             "CREATE TABLE IF NOT EXISTS teams (
                 id VARCHAR(36) PRIMARY KEY,
                 name VARCHAR(160) NOT NULL,
@@ -48,7 +81,8 @@ impl Database {
         )
         .execute(&self.pool)
         .await?;
-        sqlx::query(
+        db_query!(
+            self,
             "CREATE TABLE IF NOT EXISTS team_members (
                 team_id VARCHAR(36) NOT NULL,
                 user_id VARCHAR(36) NOT NULL,
@@ -59,7 +93,8 @@ impl Database {
         )
         .execute(&self.pool)
         .await?;
-        sqlx::query(
+        db_query!(
+            self,
             "CREATE TABLE IF NOT EXISTS workspaces (
                 id VARCHAR(36) PRIMARY KEY,
                 name VARCHAR(160) NOT NULL,
@@ -71,7 +106,8 @@ impl Database {
         )
         .execute(&self.pool)
         .await?;
-        sqlx::query(
+        db_query!(
+            self,
             "CREATE TABLE IF NOT EXISTS knowledge_bases (
                 id VARCHAR(36) PRIMARY KEY,
                 workspace_id VARCHAR(36) NOT NULL,
@@ -82,7 +118,8 @@ impl Database {
         )
         .execute(&self.pool)
         .await?;
-        sqlx::query(
+        db_query!(
+            self,
             "CREATE TABLE IF NOT EXISTS team_invitations (
                 id VARCHAR(36) PRIMARY KEY,
                 team_id VARCHAR(36) NOT NULL,
@@ -95,12 +132,15 @@ impl Database {
         )
         .execute(&self.pool)
         .await?;
-        sqlx::query(
+        db_query!(
+            self,
             "CREATE TABLE IF NOT EXISTS documents (
                 id VARCHAR(36) PRIMARY KEY,
+                knowledge_base_id VARCHAR(36),
                 title VARCHAR(255) NOT NULL,
                 content TEXT NOT NULL,
                 parent_id VARCHAR(36),
+                is_folder INTEGER NOT NULL DEFAULT 0,
                 tags TEXT NOT NULL,
                 author_id VARCHAR(36) NOT NULL,
                 created_at VARCHAR(40) NOT NULL,
@@ -109,7 +149,8 @@ impl Database {
         )
         .execute(&self.pool)
         .await?;
-        sqlx::query(
+        db_query!(
+            self,
             "CREATE TABLE IF NOT EXISTS document_versions (
                 id VARCHAR(36) PRIMARY KEY,
                 document_id VARCHAR(36) NOT NULL,
@@ -119,17 +160,26 @@ impl Database {
         )
         .execute(&self.pool)
         .await?;
-        // Existing installations predate knowledge-base ownership. The
-        // ignored duplicate-column error keeps this migration repeatable.
-        let _ = sqlx::query("ALTER TABLE documents ADD COLUMN knowledge_base_id VARCHAR(36)")
-            .execute(&self.pool)
-            .await;
+        // Existing installations may predate knowledge-base ownership and folders.
+        // Ignoring duplicate-column errors keeps these migrations repeatable.
+        let _ = db_query!(
+            self,
+            "ALTER TABLE documents ADD COLUMN knowledge_base_id VARCHAR(36)"
+        )
+        .execute(&self.pool)
+        .await;
+        let _ = db_query!(
+            self,
+            "ALTER TABLE documents ADD COLUMN is_folder INTEGER NOT NULL DEFAULT 0"
+        )
+        .execute(&self.pool)
+        .await;
         self.ensure_personal_workspaces().await?;
         Ok(())
     }
 
     async fn ensure_personal_workspaces(&self) -> Result<(), AppError> {
-        let rows = sqlx::query("SELECT id FROM app_users")
+        let rows = db_query!(self, "SELECT id FROM app_users")
             .fetch_all(&self.pool)
             .await?;
         for row in rows {
@@ -143,7 +193,8 @@ impl Database {
         &self,
         user_id: Uuid,
     ) -> Result<(Workspace, KnowledgeBase), AppError> {
-        let workspace_row = sqlx::query(
+        let workspace_row = db_query!(
+            self,
             "SELECT id, name, kind, owner_id, team_id FROM workspaces
              WHERE kind = 'personal' AND owner_id = ?",
         )
@@ -160,7 +211,8 @@ impl Database {
                 owner_id: Some(user_id),
                 team_id: None,
             };
-            sqlx::query(
+            db_query!(
+                self,
                 "INSERT INTO workspaces (id, name, kind, owner_id, team_id, created_at)
                  VALUES (?, ?, 'personal', ?, NULL, ?)",
             )
@@ -172,7 +224,8 @@ impl Database {
             .await?;
             workspace
         };
-        let kb_row = sqlx::query(
+        let kb_row = db_query!(
+            self,
             "SELECT id, workspace_id, name, description, created_at
              FROM knowledge_bases WHERE workspace_id = ? ORDER BY created_at LIMIT 1",
         )
@@ -192,7 +245,8 @@ impl Database {
             self.insert_knowledge_base(&knowledge_base).await?;
             knowledge_base
         };
-        sqlx::query(
+        db_query!(
+            self,
             "UPDATE documents SET knowledge_base_id = ?
              WHERE author_id = ? AND knowledge_base_id IS NULL",
         )
@@ -204,7 +258,7 @@ impl Database {
     }
 
     pub(crate) async fn user_count(&self) -> Result<i64, AppError> {
-        let row = sqlx::query("SELECT COUNT(*) AS count FROM app_users")
+        let row = db_query!(self, "SELECT COUNT(*) AS count FROM app_users")
             .fetch_one(&self.pool)
             .await?;
         Ok(row.try_get::<i64, _>("count")?)
@@ -214,7 +268,8 @@ impl Database {
         &self,
         username: &str,
     ) -> Result<Option<User>, AppError> {
-        let row = sqlx::query(
+        let row = db_query!(
+            self,
             "SELECT id, username, display_name, password_hash, salt, role, created_at
              FROM app_users WHERE username = ?",
         )
@@ -225,7 +280,8 @@ impl Database {
     }
 
     pub(crate) async fn get_user(&self, id: Uuid) -> Result<Option<User>, AppError> {
-        let row = sqlx::query(
+        let row = db_query!(
+            self,
             "SELECT id, username, display_name, password_hash, salt, role, created_at
              FROM app_users WHERE id = ?",
         )
@@ -236,7 +292,8 @@ impl Database {
     }
 
     pub(crate) async fn insert_user(&self, user: &User) -> Result<(), AppError> {
-        sqlx::query(
+        db_query!(
+            self,
             "INSERT INTO app_users
              (id, username, display_name, password_hash, salt, role, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -255,7 +312,8 @@ impl Database {
     }
 
     pub(crate) async fn list_workspaces(&self, user_id: Uuid) -> Result<Vec<Workspace>, AppError> {
-        let mut workspaces = sqlx::query(
+        let mut workspaces = db_query!(
+            self,
             "SELECT id, name, kind, owner_id, team_id FROM workspaces
              WHERE kind = 'personal' AND owner_id = ? ORDER BY name",
         )
@@ -265,7 +323,8 @@ impl Database {
         .into_iter()
         .map(row_to_workspace)
         .collect::<Result<Vec<_>, _>>()?;
-        let team_rows = sqlx::query(
+        let team_rows = db_query!(
+            self,
             "SELECT w.id, w.name, w.kind, w.owner_id, w.team_id
              FROM workspaces w JOIN team_members m ON m.team_id = w.team_id
              WHERE w.kind = 'team' AND m.user_id = ? ORDER BY w.name",
@@ -283,7 +342,8 @@ impl Database {
     }
 
     pub(crate) async fn all_workspaces(&self) -> Result<Vec<Workspace>, AppError> {
-        let rows = sqlx::query(
+        let rows = db_query!(
+            self,
             "SELECT id, name, kind, owner_id, team_id FROM workspaces ORDER BY LOWER(name)",
         )
         .fetch_all(&self.pool)
@@ -292,12 +352,15 @@ impl Database {
     }
 
     pub(crate) async fn get_workspace(&self, id: Uuid) -> Result<Option<Workspace>, AppError> {
-        sqlx::query("SELECT id, name, kind, owner_id, team_id FROM workspaces WHERE id = ?")
-            .bind(id.to_string())
-            .fetch_optional(&self.pool)
-            .await?
-            .map(row_to_workspace)
-            .transpose()
+        db_query!(
+            self,
+            "SELECT id, name, kind, owner_id, team_id FROM workspaces WHERE id = ?"
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?
+        .map(row_to_workspace)
+        .transpose()
     }
 
     pub(crate) async fn user_can_access_workspace(
@@ -305,7 +368,8 @@ impl Database {
         user_id: Uuid,
         workspace_id: Uuid,
     ) -> Result<bool, AppError> {
-        let row = sqlx::query(
+        let row = db_query!(
+            self,
             "SELECT w.kind, w.owner_id, w.team_id, m.user_id AS member_user_id
              FROM workspaces w LEFT JOIN team_members m
              ON m.team_id = w.team_id AND m.user_id = ? WHERE w.id = ?",
@@ -328,7 +392,8 @@ impl Database {
         &self,
         workspace_id: Uuid,
     ) -> Result<Vec<KnowledgeBase>, AppError> {
-        let rows = sqlx::query(
+        let rows = db_query!(
+            self,
             "SELECT id, workspace_id, name, description, created_at
              FROM knowledge_bases WHERE workspace_id = ? ORDER BY LOWER(name)",
         )
@@ -342,7 +407,8 @@ impl Database {
         &self,
         id: Uuid,
     ) -> Result<Option<KnowledgeBase>, AppError> {
-        sqlx::query(
+        db_query!(
+            self,
             "SELECT id, workspace_id, name, description, created_at
              FROM knowledge_bases WHERE id = ?",
         )
@@ -357,7 +423,8 @@ impl Database {
         &self,
         knowledge_base: &KnowledgeBase,
     ) -> Result<(), AppError> {
-        sqlx::query(
+        db_query!(
+            self,
             "INSERT INTO knowledge_bases (id, workspace_id, name, description, created_at)
              VALUES (?, ?, ?, ?, ?)",
         )
@@ -375,7 +442,8 @@ impl Database {
         &self,
         user_id: Uuid,
     ) -> Result<Vec<KnowledgeBase>, AppError> {
-        let rows = sqlx::query(
+        let rows = db_query!(
+            self,
             "SELECT DISTINCT kb.id, kb.workspace_id, kb.name, kb.description, kb.created_at
              FROM knowledge_bases kb JOIN workspaces w ON w.id = kb.workspace_id
              LEFT JOIN team_members m ON m.team_id = w.team_id AND m.user_id = ?
@@ -393,7 +461,8 @@ impl Database {
         let team_id = Uuid::new_v4();
         let workspace_id = Uuid::new_v4();
         let now = Utc::now();
-        sqlx::query(
+        db_query!(
+            self,
             "INSERT INTO workspaces (id, name, kind, owner_id, team_id, created_at)
              VALUES (?, ?, 'team', NULL, ?, ?)",
         )
@@ -403,7 +472,8 @@ impl Database {
         .bind(now.to_rfc3339())
         .execute(&self.pool)
         .await?;
-        sqlx::query(
+        db_query!(
+            self,
             "INSERT INTO teams (id, name, owner_id, workspace_id, created_at)
              VALUES (?, ?, ?, ?, ?)",
         )
@@ -414,7 +484,8 @@ impl Database {
         .bind(now.to_rfc3339())
         .execute(&self.pool)
         .await?;
-        sqlx::query(
+        db_query!(
+            self,
             "INSERT INTO team_members (team_id, user_id, role, joined_at)
              VALUES (?, ?, 'owner', ?)",
         )
@@ -441,7 +512,8 @@ impl Database {
     }
 
     pub(crate) async fn list_teams(&self, user_id: Uuid) -> Result<Vec<Team>, AppError> {
-        let rows = sqlx::query(
+        let rows = db_query!(
+            self,
             "SELECT t.id, t.name, t.owner_id, t.workspace_id, t.created_at
              FROM teams t JOIN team_members m ON m.team_id = t.id
              WHERE m.user_id = ? ORDER BY LOWER(t.name)",
@@ -453,12 +525,15 @@ impl Database {
     }
 
     pub(crate) async fn get_team(&self, team_id: Uuid) -> Result<Option<Team>, AppError> {
-        sqlx::query("SELECT id, name, owner_id, workspace_id, created_at FROM teams WHERE id = ?")
-            .bind(team_id.to_string())
-            .fetch_optional(&self.pool)
-            .await?
-            .map(row_to_team)
-            .transpose()
+        db_query!(
+            self,
+            "SELECT id, name, owner_id, workspace_id, created_at FROM teams WHERE id = ?"
+        )
+        .bind(team_id.to_string())
+        .fetch_optional(&self.pool)
+        .await?
+        .map(row_to_team)
+        .transpose()
     }
 
     pub(crate) async fn team_member_role(
@@ -466,11 +541,14 @@ impl Database {
         team_id: Uuid,
         user_id: Uuid,
     ) -> Result<Option<TeamRole>, AppError> {
-        let row = sqlx::query("SELECT role FROM team_members WHERE team_id = ? AND user_id = ?")
-            .bind(team_id.to_string())
-            .bind(user_id.to_string())
-            .fetch_optional(&self.pool)
-            .await?;
+        let row = db_query!(
+            self,
+            "SELECT role FROM team_members WHERE team_id = ? AND user_id = ?"
+        )
+        .bind(team_id.to_string())
+        .bind(user_id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
         row.map(|row| parse_team_role(row.try_get::<String, _>("role")?))
             .transpose()
     }
@@ -479,7 +557,8 @@ impl Database {
         &self,
         team_id: Uuid,
     ) -> Result<Vec<TeamMember>, AppError> {
-        let rows = sqlx::query(
+        let rows = db_query!(
+            self,
             "SELECT m.user_id, u.username, u.display_name, m.role, m.joined_at
              FROM team_members m JOIN app_users u ON u.id = m.user_id
              WHERE m.team_id = ? ORDER BY m.joined_at",
@@ -503,7 +582,8 @@ impl Database {
             .ok_or_else(|| AppError::NotFound("team not found".to_string()))?;
         let id = Uuid::new_v4();
         let now = Utc::now();
-        sqlx::query(
+        db_query!(
+            self,
             "INSERT INTO team_invitations
              (id, team_id, inviter_id, invitee_id, token_hash, status, created_at)
              VALUES (?, ?, ?, ?, ?, 'pending', ?)",
@@ -531,7 +611,8 @@ impl Database {
         &self,
         user_id: Uuid,
     ) -> Result<Vec<TeamInvitation>, AppError> {
-        let rows = sqlx::query(
+        let rows = db_query!(
+            self,
             "SELECT i.id, i.team_id, t.name AS team_name, i.inviter_id,
                     i.invitee_id, i.status, i.created_at
              FROM team_invitations i JOIN teams t ON t.id = i.team_id
@@ -548,7 +629,8 @@ impl Database {
         token_hash: &str,
         user_id: Uuid,
     ) -> Result<Team, AppError> {
-        let row = sqlx::query(
+        let row = db_query!(
+            self,
             "SELECT id, team_id, invitee_id, status FROM team_invitations
              WHERE token_hash = ?",
         )
@@ -569,7 +651,8 @@ impl Database {
         }
         let team_id = parse_uuid_str(row.try_get("team_id")?)?;
         let now = Utc::now();
-        sqlx::query(
+        db_query!(
+            self,
             "INSERT INTO team_members (team_id, user_id, role, joined_at)
              VALUES (?, ?, 'member', ?)",
         )
@@ -585,10 +668,13 @@ impl Database {
                 AppError::Internal(error.to_string())
             }
         })?;
-        sqlx::query("UPDATE team_invitations SET status = 'accepted' WHERE id = ?")
-            .bind(row.try_get::<String, _>("id")?)
-            .execute(&self.pool)
-            .await?;
+        db_query!(
+            self,
+            "UPDATE team_invitations SET status = 'accepted' WHERE id = ?"
+        )
+        .bind(row.try_get::<String, _>("id")?)
+        .execute(&self.pool)
+        .await?;
         self.get_team(team_id)
             .await?
             .ok_or_else(|| AppError::NotFound("team not found".to_string()))
@@ -600,8 +686,8 @@ impl Database {
         knowledge_base_id: Uuid,
     ) -> Result<Vec<Document>, AppError> {
         let rows = if let Some(parent_id) = parent_id {
-            sqlx::query(
-                "SELECT id, knowledge_base_id, title, content, parent_id, tags, author_id, created_at, updated_at
+            db_query!(self,
+                "SELECT id, knowledge_base_id, title, content, parent_id, is_folder, tags, author_id, created_at, updated_at
                  FROM documents WHERE knowledge_base_id = ? AND parent_id = ? ORDER BY LOWER(title)",
             )
             .bind(knowledge_base_id.to_string())
@@ -609,8 +695,8 @@ impl Database {
             .fetch_all(&self.pool)
             .await?
         } else {
-            sqlx::query(
-                "SELECT id, knowledge_base_id, title, content, parent_id, tags, author_id, created_at, updated_at
+            db_query!(self,
+                "SELECT id, knowledge_base_id, title, content, parent_id, is_folder, tags, author_id, created_at, updated_at
                  FROM documents WHERE knowledge_base_id = ? AND parent_id IS NULL ORDER BY LOWER(title)",
             )
             .bind(knowledge_base_id.to_string())
@@ -626,9 +712,9 @@ impl Database {
         &self,
         knowledge_base_id: Uuid,
     ) -> Result<Vec<Document>, AppError> {
-        let rows = sqlx::query(
-            "SELECT id, knowledge_base_id, title, content, parent_id, tags, author_id, created_at, updated_at
-             FROM documents WHERE knowledge_base_id = ?",
+        let rows = db_query!(self,
+            "SELECT id, knowledge_base_id, title, content, parent_id, is_folder, tags, author_id, created_at, updated_at
+             FROM documents WHERE knowledge_base_id = ? ORDER BY LOWER(title)",
         )
         .bind(knowledge_base_id.to_string())
         .fetch_all(&self.pool)
@@ -639,8 +725,8 @@ impl Database {
     }
 
     pub(crate) async fn get_document(&self, id: Uuid) -> Result<Option<Document>, AppError> {
-        let row = sqlx::query(
-            "SELECT id, knowledge_base_id, title, content, parent_id, tags, author_id, created_at, updated_at
+        let row = db_query!(self,
+            "SELECT id, knowledge_base_id, title, content, parent_id, is_folder, tags, author_id, created_at, updated_at
              FROM documents WHERE id = ?",
         )
         .bind(id.to_string())
@@ -653,24 +739,53 @@ impl Database {
     }
 
     pub(crate) async fn document_exists(&self, id: Uuid) -> Result<bool, AppError> {
-        let row = sqlx::query("SELECT 1 AS exists_flag FROM documents WHERE id = ?")
+        let row = db_query!(self, "SELECT 1 AS exists_flag FROM documents WHERE id = ?")
             .bind(id.to_string())
             .fetch_optional(&self.pool)
             .await?;
         Ok(row.is_some())
     }
 
+    pub(crate) async fn document_is_descendant(
+        &self,
+        candidate_id: Uuid,
+        ancestor_id: Uuid,
+    ) -> Result<bool, AppError> {
+        let mut current_id = Some(candidate_id);
+        let mut visited = HashSet::new();
+        while let Some(id) = current_id {
+            if id == ancestor_id {
+                return Ok(true);
+            }
+            if !visited.insert(id) {
+                return Ok(false);
+            }
+            let row = db_query!(self, "SELECT parent_id FROM documents WHERE id = ?")
+                .bind(id.to_string())
+                .fetch_optional(&self.pool)
+                .await?;
+            current_id = row
+                .map(|row| row.try_get::<Option<String>, _>("parent_id"))
+                .transpose()?
+                .flatten()
+                .map(parse_uuid_str)
+                .transpose()?;
+        }
+        Ok(false)
+    }
+
     pub(crate) async fn insert_document(&self, doc: &Document) -> Result<(), AppError> {
-        sqlx::query(
+        db_query!(self,
             "INSERT INTO documents
-             (id, knowledge_base_id, title, content, parent_id, tags, author_id, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             (id, knowledge_base_id, title, content, parent_id, is_folder, tags, author_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(doc.id.to_string())
         .bind(doc.knowledge_base_id.to_string())
         .bind(&doc.title)
         .bind(&doc.content)
         .bind(doc.parent_id.map(|value| value.to_string()))
+        .bind(i32::from(doc.is_folder))
         .bind(serde_json::to_string(&doc.tags)?)
         .bind(doc.author_id.to_string())
         .bind(doc.created_at.to_rfc3339())
@@ -681,14 +796,16 @@ impl Database {
     }
 
     pub(crate) async fn update_document(&self, doc: &Document) -> Result<(), AppError> {
-        sqlx::query(
+        db_query!(
+            self,
             "UPDATE documents
-             SET title = ?, content = ?, parent_id = ?, tags = ?, updated_at = ?
+             SET title = ?, content = ?, parent_id = ?, is_folder = ?, tags = ?, updated_at = ?
              WHERE id = ?",
         )
         .bind(&doc.title)
         .bind(&doc.content)
         .bind(doc.parent_id.map(|value| value.to_string()))
+        .bind(i32::from(doc.is_folder))
         .bind(serde_json::to_string(&doc.tags)?)
         .bind(doc.updated_at.to_rfc3339())
         .bind(doc.id.to_string())
@@ -702,7 +819,8 @@ impl Database {
         document_id: Uuid,
         version: &DocumentVersion,
     ) -> Result<(), AppError> {
-        sqlx::query(
+        db_query!(
+            self,
             "INSERT INTO document_versions (id, document_id, content, saved_at)
              VALUES (?, ?, ?, ?)",
         )
@@ -721,9 +839,13 @@ impl Database {
         }
         let mut stack = vec![id];
         let mut ordered = Vec::new();
+        let mut visited = HashSet::new();
         while let Some(current_id) = stack.pop() {
+            if !visited.insert(current_id) {
+                continue;
+            }
             ordered.push(current_id);
-            let child_rows = sqlx::query("SELECT id FROM documents WHERE parent_id = ?")
+            let child_rows = db_query!(self, "SELECT id FROM documents WHERE parent_id = ?")
                 .bind(current_id.to_string())
                 .fetch_all(&self.pool)
                 .await?;
@@ -732,11 +854,11 @@ impl Database {
             }
         }
         for document_id in ordered.into_iter().rev() {
-            sqlx::query("DELETE FROM document_versions WHERE document_id = ?")
+            db_query!(self, "DELETE FROM document_versions WHERE document_id = ?")
                 .bind(document_id.to_string())
                 .execute(&self.pool)
                 .await?;
-            sqlx::query("DELETE FROM documents WHERE id = ?")
+            db_query!(self, "DELETE FROM documents WHERE id = ?")
                 .bind(document_id.to_string())
                 .execute(&self.pool)
                 .await?;
@@ -745,7 +867,8 @@ impl Database {
     }
 
     async fn document_versions(&self, document_id: Uuid) -> Result<Vec<DocumentVersion>, AppError> {
-        let rows = sqlx::query(
+        let rows = db_query!(
+            self,
             "SELECT content, saved_at FROM document_versions
              WHERE document_id = ? ORDER BY saved_at DESC",
         )
@@ -754,6 +877,108 @@ impl Database {
         .await?;
         rows.into_iter().map(row_to_document_version).collect()
     }
+}
+
+fn postgres_sql(sql: &'static str) -> &'static str {
+    if !sql.contains('?') {
+        return sql;
+    }
+    let cache = POSTGRES_QUERY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(normalized) = cache.get(sql) {
+        return normalized;
+    }
+    let normalized = Box::leak(postgres_bind_sql(sql).into_boxed_str());
+    cache.insert(sql, normalized);
+    normalized
+}
+
+#[derive(Clone, Copy)]
+enum SqlLexState {
+    Code,
+    SingleQuoted,
+    DoubleQuoted,
+    LineComment,
+    BlockComment,
+}
+
+fn postgres_bind_sql(sql: &str) -> String {
+    let mut output = String::with_capacity(sql.len() + 16);
+    let mut bind_index = 0usize;
+    let mut state = SqlLexState::Code;
+    let mut characters = sql.chars().peekable();
+
+    while let Some(character) = characters.next() {
+        match state {
+            SqlLexState::Code => match character {
+                '\'' => {
+                    output.push(character);
+                    state = SqlLexState::SingleQuoted;
+                }
+                '"' => {
+                    output.push(character);
+                    state = SqlLexState::DoubleQuoted;
+                }
+                '-' if characters.peek() == Some(&'-') => {
+                    output.push(character);
+                    output.push(characters.next().expect("line comment marker"));
+                    state = SqlLexState::LineComment;
+                }
+                '/' if characters.peek() == Some(&'*') => {
+                    output.push(character);
+                    output.push(characters.next().expect("block comment marker"));
+                    state = SqlLexState::BlockComment;
+                }
+                '?' => {
+                    bind_index += 1;
+                    output.push('$');
+                    output.push_str(&bind_index.to_string());
+                }
+                _ => output.push(character),
+            },
+            SqlLexState::SingleQuoted => {
+                output.push(character);
+                if character == '\\' {
+                    if let Some(escaped) = characters.next() {
+                        output.push(escaped);
+                    }
+                } else if character == '\'' {
+                    if characters.peek() == Some(&'\'') {
+                        output.push(characters.next().expect("escaped quote"));
+                    } else {
+                        state = SqlLexState::Code;
+                    }
+                }
+            }
+            SqlLexState::DoubleQuoted => {
+                output.push(character);
+                if character == '"' {
+                    if characters.peek() == Some(&'"') {
+                        output.push(characters.next().expect("escaped identifier quote"));
+                    } else {
+                        state = SqlLexState::Code;
+                    }
+                }
+            }
+            SqlLexState::LineComment => {
+                output.push(character);
+                if character == '\n' {
+                    state = SqlLexState::Code;
+                }
+            }
+            SqlLexState::BlockComment => {
+                output.push(character);
+                if character == '*' && characters.peek() == Some(&'/') {
+                    output.push(characters.next().expect("block comment terminator"));
+                    state = SqlLexState::Code;
+                }
+            }
+        }
+    }
+
+    output
 }
 
 fn parse_uuid_str(value: String) -> Result<Uuid, AppError> {
@@ -794,6 +1019,7 @@ fn row_to_document_without_versions(row: sqlx::any::AnyRow) -> Result<Document, 
             .try_get::<Option<String>, _>("parent_id")?
             .map(parse_uuid_str)
             .transpose()?,
+        is_folder: row.try_get::<i32, _>("is_folder")? != 0,
         tags: serde_json::from_str(&tags_json).unwrap_or_default(),
         author_id: parse_uuid_str(row.try_get::<String, _>("author_id")?)?,
         created_at: parse_datetime_str(row.try_get("created_at")?)?,

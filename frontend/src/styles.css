@@ -891,7 +891,7 @@ label {
 
 .knowledge-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 30px;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   border-radius: var(--radius-sm);
   color: var(--rail-muted);
@@ -950,7 +950,15 @@ label {
   color: var(--rail-muted);
 }
 
-.knowledge-add-btn {
+.knowledge-actions,
+.tree-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.knowledge-action-btn,
+.tree-item-actions button {
   display: grid;
   place-items: center;
   width: 26px;
@@ -960,16 +968,22 @@ label {
   background: transparent;
   color: var(--rail-faint);
   cursor: pointer;
+}
+
+.knowledge-action-btn {
   opacity: 0;
 }
 
-.knowledge-row:hover .knowledge-add-btn,
-.knowledge-row.active .knowledge-add-btn,
-.knowledge-add-btn:focus-visible {
+.knowledge-row:hover .knowledge-action-btn,
+.knowledge-row.active .knowledge-action-btn,
+.knowledge-action-btn:focus-visible,
+.tree-item:hover .tree-item-actions,
+.tree-item:focus-within .tree-item-actions {
   opacity: 1;
 }
 
-.knowledge-add-btn:hover {
+.knowledge-action-btn:hover,
+.tree-item-actions button:hover {
   background: var(--rail-line);
   color: var(--rail-ink);
 }
@@ -981,11 +995,19 @@ label {
   gap: 1px;
 }
 
+.tree-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-width: 0;
+}
+
 .article-item {
   display: flex;
   align-items: center;
   gap: 7px;
   width: 100%;
+  min-width: 0;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -1007,6 +1029,14 @@ label {
   box-shadow: inset 2px 0 0 var(--accent-bright);
 }
 
+.article-item.folder {
+  font-weight: 600;
+}
+
+.article-item.folder .article-title {
+  font-weight: 650;
+}
+
 .article-item svg {
   flex: none;
   color: var(--rail-faint);
@@ -1016,7 +1046,12 @@ label {
   color: var(--accent-bright);
 }
 
-.article-item span {
+.tree-disclosure {
+  flex: 0 0 13px;
+  width: 13px;
+}
+
+.article-title {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -1024,6 +1059,12 @@ label {
   white-space: nowrap;
   font-size: 12.5px;
   font-weight: 500;
+}
+
+.tree-item-actions {
+  padding-right: 3px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
 }
 
 .article-item small {
@@ -1062,6 +1103,10 @@ label {
   color: var(--rail-faint);
   font-size: 11px;
   padding-left: 4px;
+}
+
+.zip-import-input {
+  display: none;
 }
 
 /* 协作与 MCP 对话框 */

@@ -10,6 +10,7 @@ fn document(title: &str, content: &str, tags: &[&str], age_minutes: i64) -> Docu
         title: title.to_string(),
         content: content.to_string(),
         parent_id: None,
+        is_folder: false,
         tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
         author_id: Uuid::new_v4(),
         created_at: timestamp,
@@ -48,4 +49,11 @@ fn search_honors_requested_and_global_limits() {
 fn empty_query_returns_no_results() {
     let documents = vec![document("Rust", "content", &[], 0)];
     assert!(search_documents(&documents, "   ", 10).is_empty());
+}
+
+#[test]
+fn folders_are_not_search_results() {
+    let mut folder = document("Rust guides", "", &[], 0);
+    folder.is_folder = true;
+    assert!(search_documents(&[folder], "rust", 10).is_empty());
 }

@@ -8,6 +8,7 @@ mod setup;
 use crate::AppState;
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     routing::{get, post},
 };
 
@@ -56,6 +57,11 @@ pub(crate) fn router() -> Router<AppState> {
             get(documents::read_document)
                 .put(documents::update_document)
                 .delete(documents::delete_document),
+        )
+        .route(
+            "/api/knowledge-bases/{knowledge_base_id}/import-zip",
+            post(documents::import_zip)
+                .layer(DefaultBodyLimit::max(documents::MAX_ZIP_MULTIPART_BYTES)),
         )
         .route("/api/search", get(search::search_documents))
 }

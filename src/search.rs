@@ -12,6 +12,7 @@ pub fn search_documents(documents: &[Document], query: &str, limit: usize) -> Ve
 
     let mut results = documents
         .iter()
+        .filter(|doc| !doc.is_folder)
         .filter_map(|doc| {
             let title = doc.title.to_lowercase();
             let content = doc.content.to_lowercase();

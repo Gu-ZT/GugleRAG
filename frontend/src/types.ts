@@ -87,6 +87,8 @@ export interface DocumentItem {
   knowledge_base_id: string;
   title: string;
   content?: string;
+  parent_id: string | null;
+  is_folder: boolean;
   tags: string[];
   versions?: Array<{
     content: string;
@@ -94,6 +96,16 @@ export interface DocumentItem {
   }>;
   created_at?: string;
   updated_at: string;
+}
+
+export interface ZipImportResult {
+  imported_files: number;
+  created_folders: number;
+  skipped_entries: number;
+  skips: Array<{
+    path: string;
+    reason: string;
+  }>;
 }
 
 export interface SearchResult {
