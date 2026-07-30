@@ -23,16 +23,34 @@ jobs:
         include:
           - platform: linux
             arch: x86_64
-            runner: ubuntu-22.04
+            runner: ubuntu-24.04
             rust_target: x86_64-unknown-linux-gnu
+            executable: target/x86_64-unknown-linux-gnu/debug/GugleRAG
+          - platform: linux
+            arch: aarch64
+            runner: ubuntu-24.04-arm
+            rust_target: aarch64-unknown-linux-gnu
+            executable: target/aarch64-unknown-linux-gnu/debug/GugleRAG
           - platform: windows
             arch: x86_64
             runner: windows-latest
             rust_target: x86_64-pc-windows-msvc
+            executable: target/x86_64-pc-windows-msvc/debug/GugleRAG.exe
+          - platform: windows
+            arch: aarch64
+            runner: windows-11-arm
+            rust_target: aarch64-pc-windows-msvc
+            executable: target/aarch64-pc-windows-msvc/debug/GugleRAG.exe
           - platform: macos
             arch: aarch64
-            runner: macos-14
+            runner: macos-15
             rust_target: aarch64-apple-darwin
+            executable: target/aarch64-apple-darwin/debug/GugleRAG
+          - platform: macos
+            arch: x86_64
+            runner: macos-15-intel
+            rust_target: x86_64-apple-darwin
+            executable: target/x86_64-apple-darwin/debug/GugleRAG
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
@@ -66,10 +84,17 @@ jobs:
         run: npm run build
       - name: Build backend
         run: cargo build --workspace --locked --target ${{ matrix.rust_target }}
+      - name: Verify native binary architecture
+        run: >-
+          node ci/verify-binary.mjs
+          --platform "${{ matrix.platform }}"
+          --arch "${{ matrix.arch }}"
+          --binary "${{ matrix.executable }}"
+          --native
 
   integration:
     name: Server integration (linux-x86_64)
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5

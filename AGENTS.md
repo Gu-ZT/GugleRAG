@@ -22,7 +22,7 @@
 - Keep `MCP_PUBLIC_URL` available for deployments where `SERVER_HOST` is a wildcard address or the service is behind a reverse proxy.
 - Keep `src/main.rs` as a thin executable entry point. Backend composition belongs in `src/lib.rs`; configuration, persistence, domain models, authentication, REST APIs, MCP, and search belong in their dedicated modules.
 - Put backend tests in the top-level `tests/` directory so they exercise the public library surface instead of being embedded in runtime modules.
-- CI supports Linux x64, Windows x64, and macOS ARM64 through native GitHub-hosted runners. Do not advertise another release target until its archive is built and tested on an appropriate runner.
+- CI supports Linux x64/ARM64, Windows x64/ARM64, and macOS ARM64/x64 through native GitHub-hosted runners. Keep binary architecture verification and native server smoke tests enabled for every release target.
 - Keep the release version synchronized across `Cargo.toml`, `Cargo.lock`, `frontend/package.json`, and `frontend/package-lock.json`. Both changelogs require a matching `## [x.y.z]` section before tagging `vx.y.z`.
 - Release artifacts are unsigned portable archives containing the executable and `frontend/dist`. Preserve that layout unless static assets become embedded in the executable, and keep generated `ci-output/` and `release/` directories untracked.
 

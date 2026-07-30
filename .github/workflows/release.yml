@@ -57,22 +57,34 @@ jobs:
         include:
           - platform: linux
             arch: x86_64
-            runner: ubuntu-22.04
+            runner: ubuntu-24.04
             rust_target: x86_64-unknown-linux-gnu
             executable: target/x86_64-unknown-linux-gnu/release/GugleRAG
-            archive: tar.gz
+          - platform: linux
+            arch: aarch64
+            runner: ubuntu-24.04-arm
+            rust_target: aarch64-unknown-linux-gnu
+            executable: target/aarch64-unknown-linux-gnu/release/GugleRAG
           - platform: windows
             arch: x86_64
             runner: windows-latest
             rust_target: x86_64-pc-windows-msvc
             executable: target/x86_64-pc-windows-msvc/release/GugleRAG.exe
-            archive: zip
+          - platform: windows
+            arch: aarch64
+            runner: windows-11-arm
+            rust_target: aarch64-pc-windows-msvc
+            executable: target/aarch64-pc-windows-msvc/release/GugleRAG.exe
           - platform: macos
             arch: aarch64
-            runner: macos-14
+            runner: macos-15
             rust_target: aarch64-apple-darwin
             executable: target/aarch64-apple-darwin/release/GugleRAG
-            archive: tar.gz
+          - platform: macos
+            arch: x86_64
+            runner: macos-15-intel
+            rust_target: x86_64-apple-darwin
+            executable: target/x86_64-apple-darwin/release/GugleRAG
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
@@ -97,6 +109,13 @@ jobs:
         run: npm run build
       - name: Build release server
         run: cargo build --release --locked --target ${{ matrix.rust_target }}
+      - name: Verify native binary architecture
+        run: >-
+          node ci/verify-binary.mjs
+          --platform "${{ matrix.platform }}"
+          --arch "${{ matrix.arch }}"
+          --binary "${{ matrix.executable }}"
+          --native
       - name: Smoke-test release server
         run: node ci/smoke-server.mjs "${{ matrix.executable }}"
       - name: Assemble portable package

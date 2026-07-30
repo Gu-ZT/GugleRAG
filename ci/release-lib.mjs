@@ -3,8 +3,11 @@ import path from "node:path";
 
 export const releaseTargets = [
   { platform: "linux", arch: "x86_64", format: "tar.gz", label: "Linux x64" },
+  { platform: "linux", arch: "aarch64", format: "tar.gz", label: "Linux ARM64" },
   { platform: "windows", arch: "x86_64", format: "zip", label: "Windows x64" },
-  { platform: "macos", arch: "aarch64", format: "tar.gz", label: "macOS Apple Silicon" }
+  { platform: "windows", arch: "aarch64", format: "zip", label: "Windows ARM64" },
+  { platform: "macos", arch: "aarch64", format: "tar.gz", label: "macOS Apple Silicon" },
+  { platform: "macos", arch: "x86_64", format: "tar.gz", label: "macOS Intel" }
 ];
 
 export function extractChangelogSection(source, version) {

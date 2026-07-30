@@ -210,11 +210,14 @@ GitHub Actions validates the Rust backend, Vue frontend, release tooling, and a 
 
 | Platform | Runner | Rust target | Archive |
 | --- | --- | --- | --- |
-| Linux x64 | `ubuntu-22.04` | `x86_64-unknown-linux-gnu` | `.tar.gz` |
+| Linux x64 | `ubuntu-24.04` | `x86_64-unknown-linux-gnu` | `.tar.gz` |
+| Linux ARM64 | `ubuntu-24.04-arm` | `aarch64-unknown-linux-gnu` | `.tar.gz` |
 | Windows x64 | `windows-latest` | `x86_64-pc-windows-msvc` | `.zip` |
-| macOS Apple Silicon | `macos-14` | `aarch64-apple-darwin` | `.tar.gz` |
+| Windows ARM64 | `windows-11-arm` | `aarch64-pc-windows-msvc` | `.zip` |
+| macOS Apple Silicon | `macos-15` | `aarch64-apple-darwin` | `.tar.gz` |
+| macOS Intel | `macos-15-intel` | `x86_64-apple-darwin` | `.tar.gz` |
 
-Windows ARM64, Linux ARM64, and macOS x64 are not currently release targets because the repository does not yet have a native runner or verified cross-linking path for them.
+Every target uses a matching native GitHub-hosted runner. CI parses each ELF, PE, or Mach-O header to verify the packaged CPU architecture and then starts that binary for a server smoke test.
 
 Each archive is named `guglerag-v<version>-<platform>-<arch>.<format>` and has a matching `.sha256` file. It contains the server executable, `frontend/dist`, `.env.example`, both changelogs, this README, and `RELEASE-METADATA.json`. These are unsigned portable builds and must be extracted before running.
 
@@ -224,4 +227,4 @@ To publish a release:
 2. Add matching `## [x.y.z]` sections to `CHANGELOG.md` and `CHANGELOG.zh-CN.md`.
 3. Push the exact tag `vx.y.z`.
 
-The release workflow validates all three native targets, creates portable archives and checksums, generates bilingual release notes, and publishes the draft only after every package succeeds. It uses the repository-provided `GITHUB_TOKEN`; no additional secrets or signing credentials are required.
+The release workflow validates all six native targets, creates portable archives and checksums, generates bilingual release notes, and publishes the draft only after every package succeeds. It uses the repository-provided `GITHUB_TOKEN`; no additional secrets or signing credentials are required.

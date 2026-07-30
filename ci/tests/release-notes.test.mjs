@@ -32,8 +32,11 @@ test("renders every supported platform and both languages", () => {
     files: files("1.2.0")
   });
   assert.match(notes, /Linux x64/);
+  assert.match(notes, /Linux ARM64/);
   assert.match(notes, /Windows x64/);
+  assert.match(notes, /Windows ARM64/);
   assert.match(notes, /macOS Apple Silicon/);
+  assert.match(notes, /macOS Intel/);
   assert.match(notes, /English change/);
   assert.match(notes, /中文变更/);
 });
