@@ -28,7 +28,7 @@ struct EmbeddingRequest<'a> {
     input: &'a [String],
     encoding_format: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    truncate: Option<bool>,
+    truncate: Option<&'static str>,
 }
 
 #[derive(Deserialize)]
@@ -149,8 +149,8 @@ impl EmbeddingService {
             model: &self.model,
             input: inputs,
             encoding_format: "float",
-            // SiliconFlow rejects inputs above the model limit unless truncation is enabled.
-            truncate: api_key.is_some().then_some(true),
+            // SiliconFlow expects a direction string when truncating long inputs.
+            truncate: api_key.is_some().then_some("right"),
         };
         let mut builder = client.post(url).json(&request);
         if let Some(api_key) = api_key {
