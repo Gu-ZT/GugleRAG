@@ -1754,14 +1754,19 @@ label {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .editor-sheet {
-  width: min(780px, calc(100% - 48px));
+  width: min(920px, calc(100% - 56px));
   margin: 0 auto;
   padding: 44px 0 96px;
   display: grid;
   gap: 18px;
+}
+
+.editor-sheet > * {
+  min-width: 0;
 }
 
 .doc-title-input {
@@ -2024,6 +2029,81 @@ label {
 
 .markdown .footnote-backref {
   font-size: 12px;
+}
+
+/* GitHub 风格内联 HTML 元素 */
+
+.markdown img {
+  max-width: 100%;
+  border-radius: var(--radius-sm);
+}
+
+.markdown details {
+  margin: 1em 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  padding: 10px 16px;
+}
+
+.markdown summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.markdown details[open] summary {
+  margin-bottom: 8px;
+}
+
+.markdown kbd {
+  display: inline-block;
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--panel-sunken);
+  padding: 1px 7px;
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+.markdown mark {
+  background: #f6e3b4;
+  border-radius: 3px;
+  padding: 0 3px;
+  color: inherit;
+}
+
+.markdown sup,
+.markdown sub {
+  line-height: 0;
+}
+
+.markdown table {
+  display: block;
+  max-width: 100%;
+  margin: 1em 0;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.markdown th,
+.markdown td {
+  border: 1px solid var(--line-strong);
+  padding: 7px 13px;
+  text-align: left;
+}
+
+.markdown th {
+  background: var(--panel-sunken);
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.markdown tr:nth-child(even) td {
+  background: rgba(239, 237, 230, 0.4);
 }
 
 /* ---------- 空状态 ---------- */

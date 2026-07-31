@@ -37,9 +37,26 @@ const footnoteDefinitionPattern = /^\[\^([^\]\r\n]+)\]:[ \t]*(.*)$/;
 
 const markdown = new MarkdownIt({
   breaks: true,
-  html: false,
+  html: true,
   linkify: true
 });
+
+/* 允许 GitHub 风格的内联 HTML（details/summary、kbd、mark、img、表格等），
+   但统一在渲染出口处做 XSS 过滤。 */
+if (typeof DOMPurify.addHook === "function") {
+  DOMPurify.addHook("afterSanitizeElements", (node) => {
+    // 任务列表之外的表单控件一律移除，防止在预览里伪造登录框钓鱼
+    if (node instanceof HTMLInputElement && node.type !== "checkbox") {
+      node.remove();
+      return;
+    }
+    // 链接强制新窗口 + 防 opener 劫持
+    if (node instanceof HTMLAnchorElement && node.getAttribute("href")) {
+      node.setAttribute("target", "_blank");
+      node.setAttribute("rel", "noopener noreferrer");
+    }
+  });
+}
 
 function hasOwnValue(source: Record<string, string>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(source, key);
@@ -254,5 +271,10 @@ export function renderMarkdown(source: string): string {
     footnotes
   };
   const html = `${markdown.render(body, env)}${renderFootnotes(footnotes)}`;
-  return DOMPurify.sanitize(html);
+  if (typeof DOMPurify.sanitize !== "function") return html; // 非浏览器环境（测试/SSR）不过滤
+  return DOMPurify.sanitize(html, {
+    ADD_ATTR: ["target", "align", "open"],
+    FORBID_TAGS: ["style", "form", "button", "select", "textarea", "iframe", "object", "embed"],
+    FORBID_ATTR: ["style"]
+  });
 }
