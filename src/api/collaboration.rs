@@ -124,7 +124,10 @@ pub(crate) async fn delete_knowledge_base(
             ));
         }
     }
-    state.database.delete_knowledge_base(knowledge_base_id).await?;
+    state
+        .database
+        .delete_knowledge_base(knowledge_base_id)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

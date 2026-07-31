@@ -3,11 +3,7 @@ use crate::{
     config::{self, SetupRequest},
     error::AppError,
 };
-use axum::{
-    Json,
-    extract::State,
-    http::StatusCode,
-};
+use axum::{Json, extract::State, http::StatusCode};
 use serde_json::{Value, json};
 use tokio::fs;
 

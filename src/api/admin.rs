@@ -305,10 +305,7 @@ async fn admin_user_list(state: &AppState) -> Result<Vec<AdminUserResponse>, App
     Ok(responses)
 }
 
-async fn admin_user_response(
-    state: &AppState,
-    user: User,
-) -> Result<AdminUserResponse, AppError> {
+async fn admin_user_response(state: &AppState, user: User) -> Result<AdminUserResponse, AppError> {
     Ok(AdminUserResponse {
         id: user.id,
         username: user.username,

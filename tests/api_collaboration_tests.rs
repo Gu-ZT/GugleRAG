@@ -55,7 +55,8 @@ async fn deleting_a_knowledge_base_removes_its_documents() {
     .await;
     let auth_token = token(&auth).to_string();
 
-    let (_, workspaces) = json_request(&app, "GET", "/api/workspaces", Some(&auth_token), None).await;
+    let (_, workspaces) =
+        json_request(&app, "GET", "/api/workspaces", Some(&auth_token), None).await;
     let workspace_id = workspaces[0]["id"].as_str().unwrap();
     let (status, knowledge_base) = json_request(
         &app,

@@ -93,14 +93,8 @@ async fn closed_registration_rejects_public_signup() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(bootstrap["user"]["role"], "admin");
 
-    let (status, body) = json_request(
-        &app,
-        "GET",
-        "/api/auth/registration-status",
-        None,
-        None,
-    )
-    .await;
+    let (status, body) =
+        json_request(&app, "GET", "/api/auth/registration-status", None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["registration_enabled"], false);
 
@@ -128,12 +122,10 @@ async fn closed_registration_rejects_public_signup() {
 async fn administrators_manage_users_and_their_workspace_overview() {
     let filename = format!("admin-users-{}.db", Uuid::new_v4());
     let database_url = format!("sqlite://data/{filename}?mode=rwc");
-    let app = gugle_rag::build_test_router(
-        &database_url,
-        "admin-user-integration-secret-long-enough",
-    )
-    .await
-    .unwrap();
+    let app =
+        gugle_rag::build_test_router(&database_url, "admin-user-integration-secret-long-enough")
+            .await
+            .unwrap();
     let admin_auth = register(&app, "user_admin").await;
     let editor_auth = register(&app, "user_editor").await;
 
