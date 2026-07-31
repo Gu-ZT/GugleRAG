@@ -12,6 +12,48 @@
 
 GugleRAG 是一个自托管团队知识库，提供 Markdown 文档、REST API，以及面向 AI 智能体的 MCP JSON-RPC 端点。
 
+## 界面截图
+
+### 首次初始化
+
+| 服务 | 数据库 |
+| --- | --- |
+| <img src="docs/init-01.jpeg" alt="首次初始化服务步骤" width="420"> | <img src="docs/init-02.jpeg" alt="首次初始化数据库步骤" width="420"> |
+
+| 检索 | MCP |
+| --- | --- |
+| <img src="docs/init-03.jpeg" alt="首次初始化检索步骤" width="420"> | <img src="docs/init-04.jpeg" alt="首次初始化 MCP 步骤" width="420"> |
+
+### 账户流程
+
+| 登录 | 注册 |
+| --- | --- |
+| <img src="docs/login.jpeg" alt="登录界面" width="420"> | <img src="docs/register.jpeg" alt="注册界面" width="420"> |
+
+### 知识库工作区
+
+| 工作区 | 新建文档 |
+| --- | --- |
+| <img src="docs/empty-page.jpeg" alt="工作区空状态" width="420"> | <img src="docs/create_doc.jpeg" alt="新建文档对话框" width="420"> |
+
+| 编辑文档 | 预览文档 |
+| --- | --- |
+| <img src="docs/edit_doc.jpeg" alt="文档编辑器" width="420"> | <img src="docs/preview_doc.jpeg" alt="Markdown 文档预览" width="420"> |
+
+### 协作与管理
+
+| 创建团队 | 加入团队 |
+| --- | --- |
+| <img src="docs/create_team.jpeg" alt="创建团队对话框" width="420"> | <img src="docs/join_team.jpeg" alt="加入团队对话框" width="420"> |
+
+| 服务配置 | 用户管理 |
+| --- | --- |
+| <img src="docs/admin_settings.jpeg" alt="管理员服务配置" width="420"> | <img src="docs/user-management.jpeg" alt="管理员用户管理" width="420"> |
+
+| MCP 配置 |
+| --- |
+| <img src="docs/mcp.jpeg" alt="MCP 配置对话框" width="840"> |
+
 ## 当前结构
 
 ```text

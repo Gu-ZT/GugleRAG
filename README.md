@@ -12,6 +12,48 @@ English | [简体中文](README.zh_CN.md)
 
 GugleRAG is a self-hosted team knowledge base with Markdown documents, REST APIs, and an MCP JSON-RPC endpoint for AI agents.
 
+## Screenshots
+
+### First-run Setup
+
+| Service | Database |
+| --- | --- |
+| <img src="docs/init-01.jpeg" alt="First-run setup service step" width="420"> | <img src="docs/init-02.jpeg" alt="First-run setup database step" width="420"> |
+
+| Retrieval | MCP |
+| --- | --- |
+| <img src="docs/init-03.jpeg" alt="First-run setup retrieval step" width="420"> | <img src="docs/init-04.jpeg" alt="First-run setup MCP step" width="420"> |
+
+### Account Flow
+
+| Login | Registration |
+| --- | --- |
+| <img src="docs/login.jpeg" alt="Login screen" width="420"> | <img src="docs/register.jpeg" alt="Registration screen" width="420"> |
+
+### Knowledge Workspace
+
+| Workspace | Create Document |
+| --- | --- |
+| <img src="docs/empty-page.jpeg" alt="Workspace empty state" width="420"> | <img src="docs/create_doc.jpeg" alt="Create document dialog" width="420"> |
+
+| Edit Document | Preview Document |
+| --- | --- |
+| <img src="docs/edit_doc.jpeg" alt="Document editor" width="420"> | <img src="docs/preview_doc.jpeg" alt="Markdown document preview" width="420"> |
+
+### Collaboration and Administration
+
+| Create Team | Join Team |
+| --- | --- |
+| <img src="docs/create_team.jpeg" alt="Create team dialog" width="420"> | <img src="docs/join_team.jpeg" alt="Join team dialog" width="420"> |
+
+| Service Settings | User Management |
+| --- | --- |
+| <img src="docs/admin_settings.jpeg" alt="Administrator service settings" width="420"> | <img src="docs/user-management.jpeg" alt="Administrator user management" width="420"> |
+
+| MCP Configuration |
+| --- |
+| <img src="docs/mcp.jpeg" alt="MCP configuration dialog" width="840"> |
+
 ## Current Structure
 
 ```text
