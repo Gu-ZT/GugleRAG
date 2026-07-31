@@ -7,6 +7,7 @@ pub mod search;
 
 mod api;
 mod embedding;
+pub mod logging;
 mod mcp;
 mod reranker;
 
@@ -15,9 +16,10 @@ use std::{net::SocketAddr, sync::Arc};
 use tokio::{net::TcpListener, sync::watch};
 use tower_http::{
     services::{ServeDir, ServeFile},
-    trace::TraceLayer,
+    trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnRequest, DefaultOnResponse, TraceLayer},
 };
-use tracing::{info, warn};
+use tracing::{Level, info, warn};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -35,7 +37,13 @@ pub fn build_router(state: AppState) -> Router {
             ServeDir::new("frontend/dist")
                 .not_found_service(ServeFile::new("frontend/dist/index.html")),
         )
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                .on_request(DefaultOnRequest::new().level(Level::INFO))
+                .on_response(DefaultOnResponse::new().level(Level::INFO))
+                .on_failure(DefaultOnFailure::new().level(Level::WARN)),
+        )
         .with_state(state)
 }
 
@@ -93,30 +101,58 @@ async fn build_test_router_from_config(config: config::Config) -> Result<Router,
 }
 
 pub async fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "guglerag=info,tower_http=info".into()),
+    let log_writer =
+        logging::RollingLogWriter::new("logs").expect("failed to initialize logs/latest.log");
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "gugle_rag=info,tower_http=info".into());
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(log_writer)
+                .with_ansi(false),
         )
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stdout))
         .init();
+
+    info!(
+        version = env!("CARGO_PKG_VERSION"),
+        log_file = "logs/latest.log",
+        "starting GugleRAG"
+    );
 
     sqlx::any::install_default_drivers();
     loop {
         let config = config::Config::from_env();
+        info!(
+            host = %config.host,
+            port = config.port,
+            database = %config.database.redacted_url(),
+            setup_required = config.setup_required,
+            mcp_enabled = config.mcp_enabled,
+            embedding_provider = %config.embedding_provider,
+            reranker_enabled = config.reranker_enabled,
+            "loaded runtime configuration"
+        );
         config::prepare_database_path(&config.database).await;
         let database = db::Database::connect(&config.database.url)
             .await
             .expect("failed to connect database");
+        info!("database connection established");
         database
             .migrate()
             .await
             .expect("failed to migrate database");
+        info!("database migrations completed");
         let search = Arc::new(
             search::SearchEngine::from_config(&config, database.clone())
                 .expect("failed to configure search engine"),
         );
-        if let Err(error) = search.reindex_all().await {
-            warn!("failed to rebuild document embeddings: {error}");
+        match search.reindex_all().await {
+            Ok(indexed_documents) => info!(indexed_documents, "document embedding index is ready"),
+            Err(error) => {
+                warn!("failed to rebuild document embeddings: {error}");
+            }
         }
 
         let (restart_tx, mut restart_rx) = watch::channel(false);
@@ -133,7 +169,7 @@ pub async fn run() {
         let listener = TcpListener::bind(addr)
             .await
             .expect("failed to bind configured address");
-        info!("GugleRAG listening on http://{addr}");
+        info!(address = %format!("http://{addr}"), "HTTP server is listening");
         let server = axum::serve(listener, app).with_graceful_shutdown(async move {
             while restart_rx.changed().await.is_ok() {
                 if *restart_rx.borrow() {
@@ -148,8 +184,9 @@ pub async fn run() {
             info!("restarting GugleRAG with the saved configuration");
             continue;
         }
-        if let Err(error) = result {
-            warn!("server stopped: {error}");
+        match result {
+            Ok(()) => info!("HTTP server stopped"),
+            Err(error) => warn!("HTTP server stopped with error: {error}"),
         }
         break;
     }

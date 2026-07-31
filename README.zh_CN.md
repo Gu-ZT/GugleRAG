@@ -67,6 +67,7 @@ GugleRAG 是一个自托管团队知识库，提供 Markdown 文档、REST API�
 │   ├── domain.rs        # 共享领域模型
 │   ├── error.rs         # HTTP 感知的应用错误
 │   ├── embedding.rs     # 嵌入服务提供方客户端
+│   ├── logging.rs       # 滚动文件与控制台日志
 │   ├── reranker.rs      # 可选重排服务客户端
 │   ├── search.rs        # 持久化向量检索与排序
 │   ├── lib.rs           # 应用组合
@@ -132,6 +133,12 @@ cargo fmt -- --check
 cargo check
 cargo test
 ```
+
+## 日志
+
+服务会同时将结构化日志写入控制台和 `logs/latest.log`。每次进程启动时，如果上一次的 `latest.log` 非空，就会压缩为
+`logs/log-YY-MM-dd-HH:mm:ss:ms.log.gz`，然后创建新的 `latest.log`。当前日志文件在下一次写入会使大小超过 500 KiB 时滚动。
+Windows 文件名不允许使用冒号，因此 Windows 下归档文件使用 `log-YY-MM-dd-HH-mm-ss-ms.log.gz`。
 
 常用端点：
 

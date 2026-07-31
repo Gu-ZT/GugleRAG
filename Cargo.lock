@@ -10,6 +10,7 @@ dependencies = [
  "base64",
  "chrono",
  "dotenvy",
+ "flate2",
  "jsonwebtoken",
  "reqwest",
  "serde",

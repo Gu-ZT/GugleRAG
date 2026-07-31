@@ -68,6 +68,7 @@ agents.
 │   ├── domain.rs        # Shared domain models
 │   ├── error.rs         # HTTP-aware application errors
 │   ├── embedding.rs     # Embedding provider clients
+│   ├── logging.rs       # Rolling file and console logging
 │   ├── reranker.rs      # Optional reranking provider clients
 │   ├── search.rs        # Persistent vector retrieval and ranking
 │   ├── lib.rs           # Application composition
@@ -134,6 +135,13 @@ cargo fmt -- --check
 cargo check
 cargo test
 ```
+
+## Logging
+
+The server writes structured logs to both the console and `logs/latest.log`. At process startup, a non-empty previous
+`latest.log` is compressed into `logs/log-YY-MM-dd-HH:mm:ss:ms.log.gz` and a new `latest.log` is created. The active
+file rolls before a write would exceed 500 KiB. Windows does not allow colons in filenames, so Windows archives use
+`log-YY-MM-dd-HH-mm-ss-ms.log.gz` instead.
 
 Useful endpoints:
 

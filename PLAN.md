@@ -114,7 +114,7 @@
 - [x] 通过环境变量配置：数据库路径、监听端口、嵌入模式、SiliconFlow API Key 等
 - [x] 健康检查端点 `/health`
 - [x] 多平台 CI、原生服务冒烟测试及带 SHA-256 校验的便携发布包
-- [ ] 日志与可观测性（`tracing` 生态）
+- [x] 日志与可观测性（`tracing` 生态、启动日志、HTTP 请求日志和滚动文件）
 
 ---
 
@@ -201,6 +201,7 @@
 │ ├── api/ # REST API 路由
 │ ├── mcp/ # MCP 协议实现
 │ ├── embedding.rs # 嵌入服务 provider
+│ ├── logging.rs # 日志输出与滚动归档
 │ ├── reranker.rs # 重排服务 provider
 │ ├── db.rs # 数据库操作（sqlx）
 │ ├── search.rs # 向量检索与排序

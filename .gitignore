@@ -8,4 +8,5 @@
 /frontend/dist/
 /ci-output/
 /release/
+/logs/
 /tmp/
