@@ -11,7 +11,7 @@
 - Vue 工作台已支持注册/登录、文档列表、新建、编辑、保存、删除、标签和搜索。
 - Rust 后端已拆分为配置、领域模型、数据库、认证、REST API、MCP、搜索和错误处理模块，`main.rs` 仅保留启动入口。
 - 后端配置、账号校验、向量迁移和检索 provider 调用已由顶层 `tests/` 集成测试覆盖。
-- 已加入数据库中立的 `document_embedding_chunks` 分块向量索引，支持启动补建、首次搜索懒建、内容哈希失效重建和文档级最高块聚合。
+- 已加入 Rust 内嵌的知识库级 HNSW 分块向量索引，支持 `data/vector-index` 持久化、启动补建、首次搜索懒建、内容哈希失效重建和文档级最高块聚合；旧 SQL 向量表仅作为迁移来源。
 - 已加入个人/团队工作区、多知识库、团队成员邀请与加入，以及按用户/团队/全部可访问知识库隔离的 MCP 配置。
 - 已加入 Linux x64/ARM64、Windows x64/ARM64、macOS ARM64/x64 的原生 CI 验证、二进制架构检查、服务冒烟测试和便携发布包流程。
 - 已加入主分支成功构建后的唯一 prerelease，以及与清单版本严格对应的标签正式发布流程。
@@ -182,6 +182,7 @@
 | `EMBEDDING_PROVIDER`  | `stub`、`local` 或 `siliconflow`        | `stub`（向导默认 SiliconFlow）             |
 | `EMBEDDING_MODEL`     | 模型名称                                | `none`（向导默认 `BAAI/bge-m3`）           |
 | `EMBEDDING_URL`       | 完整嵌入调用地址                        | `https://api.siliconflow.cn/v1/embeddings` |
+| `VECTOR_INDEX_PATH`   | HNSW 索引目录                            | `data/vector-index`                        |
 | `SILICONFLOW_URL`     | SiliconFlow API 地址（远程模式必填）    | `https://api.siliconflow.cn`               |
 | `SILICONFLOW_API_KEY` | SiliconFlow API Key（远程模式必填）     | 空                                         |
 | `RERANKER_ENABLED`    | 是否启用重排模型                        | `false`                                    |
@@ -234,7 +235,7 @@
 - **嵌入服务资源消耗**：本地兼容 HTTP 服务的资源由服务自身管理；建议默认使用 SiliconFlow API 降低启动门槛。
 - **MCP 协议演进**：关注官方规范更新，保持协议实现的灵活性。
 - **前端实时协作**：若协同编辑实现复杂，可推迟到 Phase 5，初版仅支持手动刷新。
-- **数据迁移**：升级时自动创建 `document_embedding_chunks` 表，并按需为旧文档和旧的一文档一向量索引补建分块向量；SQLite 单文件仍便于备份。
+- **数据迁移**：升级时自动创建兼容旧版本的 SQL 向量表，并按需把旧分块向量或旧的一文档一向量索引迁入知识库级 HNSW；无法匹配当前分块布局时重新生成。SQLite 单文件与 `VECTOR_INDEX_PATH` 目录需要一起备份。
 
 ---
 

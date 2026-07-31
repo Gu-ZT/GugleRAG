@@ -4,7 +4,8 @@ use axum::{
     http::{Request, StatusCode},
 };
 use serde_json::{Value, json};
-use sqlx::Row;
+use sha2::{Digest, Sha256};
+use std::env;
 use tower::util::ServiceExt;
 use uuid::Uuid;
 
@@ -75,9 +76,15 @@ async fn migration_rebuilds_the_vector_index_for_existing_documents() {
     let filename = format!("vector-migration-{}.db", Uuid::new_v4());
     let database_url = format!("sqlite://data/{filename}?mode=rwc");
     let jwt_secret = "vector-migration-test-secret-long-enough";
-    let old_app = gugle_rag::build_test_router(&database_url, jwt_secret)
-        .await
-        .unwrap();
+    let vector_index_path =
+        env::temp_dir().join(format!("guglerag-vector-migration-{}", Uuid::new_v4()));
+    let old_app = gugle_rag::build_test_router_with_vector_index(
+        &database_url,
+        jwt_secret,
+        &vector_index_path,
+    )
+    .await
+    .unwrap();
     let token = register(&old_app, "vector_migration_owner").await;
     let knowledge_base_id = default_knowledge_base_id(&old_app, &token).await;
     let (status, document) = json_request(
@@ -96,6 +103,8 @@ async fn migration_rebuilds_the_vector_index_for_existing_documents() {
     let document_id = document["id"].as_str().unwrap().to_string();
     let legacy_pool = sqlx::SqlitePool::connect(&database_url).await.unwrap();
     let legacy_embedding = serde_json::to_string(&vec![0.0_f32; 384]).unwrap();
+    let legacy_text = "Title: Migration notes\nTags: \n\nExisting documents receive a persistent vector embedding.";
+    let legacy_content_hash = format!("{:x}", Sha256::digest(legacy_text.as_bytes()));
     sqlx::query(
         "INSERT INTO document_embeddings
          (document_id, knowledge_base_id, content_hash, provider, model, dimensions, embedding, created_at, updated_at)
@@ -103,7 +112,7 @@ async fn migration_rebuilds_the_vector_index_for_existing_documents() {
     )
     .bind(&document_id)
     .bind(&knowledge_base_id)
-    .bind("legacy-content-hash")
+    .bind(legacy_content_hash)
     .bind("stub")
     .bind("none")
     .bind(384_i32)
@@ -123,9 +132,13 @@ async fn migration_rebuilds_the_vector_index_for_existing_documents() {
         .unwrap();
     pool.close().await;
 
-    let app = gugle_rag::build_test_router(&database_url, jwt_secret)
-        .await
-        .unwrap();
+    let app = gugle_rag::build_test_router_with_vector_index(
+        &database_url,
+        jwt_secret,
+        &vector_index_path,
+    )
+    .await
+    .unwrap();
     let pool = sqlx::SqlitePool::connect(&database_url).await.unwrap();
     let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM document_embedding_chunks")
         .fetch_one(&pool)
@@ -146,24 +159,13 @@ async fn migration_rebuilds_the_vector_index_for_existing_documents() {
     assert_eq!(results[0]["id"], document_id);
 
     let pool = sqlx::SqlitePool::connect(&database_url).await.unwrap();
-    let row = sqlx::query(
-        "SELECT chunk_index, provider, model, dimensions, embedding
-         FROM document_embedding_chunks WHERE document_id = ?",
-    )
-    .bind(&document_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(row.get::<String, _>("provider"), "stub");
-    assert_eq!(row.get::<String, _>("model"), "none");
-    assert_eq!(row.get::<i32, _>("chunk_index"), 0);
-    assert_eq!(row.get::<i32, _>("dimensions"), 384);
-    assert_eq!(
-        serde_json::from_str::<Vec<f32>>(row.get("embedding"))
-            .unwrap()
-            .len(),
-        384
-    );
+    let chunk_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM document_embedding_chunks WHERE document_id = ?")
+            .bind(&document_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(chunk_count, 0);
     let legacy_pool = sqlx::SqlitePool::connect(&database_url).await.unwrap();
     let legacy_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM document_embeddings WHERE document_id = ?")
@@ -173,13 +175,9 @@ async fn migration_rebuilds_the_vector_index_for_existing_documents() {
             .unwrap();
     assert_eq!(legacy_count, 0);
     legacy_pool.close().await;
-    let first_hash = sqlx::query_scalar::<_, String>(
-        "SELECT content_hash FROM document_embedding_chunks WHERE document_id = ?",
-    )
-    .bind(&document_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let index_path = vector_index_path.join(format!("{knowledge_base_id}.index"));
+    assert!(index_path.is_file());
+    let first_index = std::fs::read(&index_path).unwrap();
     pool.close().await;
 
     let (status, updated) = json_request(
@@ -205,16 +203,27 @@ async fn migration_rebuilds_the_vector_index_for_existing_documents() {
     assert_eq!(status, StatusCode::OK, "{results}");
     assert_eq!(results[0]["id"], document_id);
 
-    let pool = sqlx::SqlitePool::connect(&database_url).await.unwrap();
-    let second_hash = sqlx::query_scalar::<_, String>(
-        "SELECT content_hash FROM document_embedding_chunks WHERE document_id = ?",
+    let second_index = std::fs::read(&index_path).unwrap();
+    assert_ne!(first_index, second_index);
+
+    drop(app);
+    let app = gugle_rag::build_test_router_with_vector_index(
+        &database_url,
+        jwt_secret,
+        &vector_index_path,
     )
-    .bind(&document_id)
-    .fetch_one(&pool)
     .await
     .unwrap();
-    assert_ne!(first_hash, second_hash);
-    pool.close().await;
+    let (status, results) = json_request(
+        &app,
+        "GET",
+        &format!("/api/search?q=refreshed&knowledge_base_id={knowledge_base_id}"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{results}");
+    assert_eq!(results[0]["id"], document_id);
 }
 
 #[tokio::test]
@@ -222,9 +231,15 @@ async fn long_documents_are_indexed_as_multiple_chunks() {
     let filename = format!("vector-chunks-{}.db", Uuid::new_v4());
     let database_url = format!("sqlite://data/{filename}?mode=rwc");
     let jwt_secret = "vector-chunks-test-secret-long-enough";
-    let app = gugle_rag::build_test_router(&database_url, jwt_secret)
-        .await
-        .unwrap();
+    let vector_index_path =
+        env::temp_dir().join(format!("guglerag-vector-chunks-{}", Uuid::new_v4()));
+    let app = gugle_rag::build_test_router_with_vector_index(
+        &database_url,
+        jwt_secret,
+        &vector_index_path,
+    )
+    .await
+    .unwrap();
     let token = register(&app, "vector_chunks_owner").await;
     let knowledge_base_id = default_knowledge_base_id(&app, &token).await;
     let content = format!("{} tail-only-marker", "prefix ".repeat(1200));
@@ -254,6 +269,8 @@ async fn long_documents_are_indexed_as_multiple_chunks() {
     assert_eq!(status, StatusCode::OK, "{results}");
     assert_eq!(results[0]["id"], document_id);
 
+    let index_path = vector_index_path.join(format!("{knowledge_base_id}.index"));
+    assert!(index_path.is_file());
     let pool = sqlx::SqlitePool::connect(&database_url).await.unwrap();
     let count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM document_embedding_chunks WHERE document_id = ?")
@@ -261,9 +278,6 @@ async fn long_documents_are_indexed_as_multiple_chunks() {
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert!(
-        count >= 2,
-        "expected multiple embedding chunks, got {count}"
-    );
+    assert_eq!(count, 0);
     pool.close().await;
 }

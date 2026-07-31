@@ -13,6 +13,7 @@ fn valid_setup() -> SetupRequest {
         embedding_provider: "stub".to_string(),
         embedding_model: "none".to_string(),
         embedding_url: "https://api.siliconflow.cn/v1/embeddings".to_string(),
+        vector_index_path: "data/vector-index".to_string(),
         siliconflow_url: None,
         siliconflow_api_key: None,
         reranker_enabled: true,
@@ -73,6 +74,7 @@ fn setup_validation_and_env_rendering_include_reranker_settings() {
     assert!(output.contains("RERANKER_PROVIDER=custom_http"));
     assert!(output.contains("RERANKER_MODEL=BAAI/bge-reranker-v2-m3"));
     assert!(output.contains("RERANKER_URL=http://127.0.0.1:9000/rerank"));
+    assert!(output.contains("VECTOR_INDEX_PATH=data/vector-index"));
 }
 
 #[test]

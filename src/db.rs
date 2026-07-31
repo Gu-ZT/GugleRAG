@@ -6,7 +6,7 @@ use crate::{
     error::AppError,
 };
 use chrono::{DateTime, Utc};
-use serde_json::{from_str, to_string};
+use serde_json::from_str;
 use sqlx::{AnyPool, Row, any::AnyPoolOptions};
 use std::{
     collections::{HashMap, HashSet},
@@ -35,9 +35,8 @@ pub struct Database {
 }
 
 #[derive(Clone)]
-pub(crate) struct DocumentEmbeddingChunk {
+pub(crate) struct DocumentEmbedding {
     pub(crate) document_id: Uuid,
-    pub(crate) chunk_index: usize,
     pub(crate) knowledge_base_id: Uuid,
     pub(crate) content_hash: String,
     pub(crate) provider: String,
@@ -45,9 +44,14 @@ pub(crate) struct DocumentEmbeddingChunk {
     pub(crate) vector: Vec<f32>,
 }
 
-pub(crate) struct NewDocumentEmbeddingChunk {
+#[derive(Clone)]
+pub(crate) struct DocumentEmbeddingChunk {
+    pub(crate) document_id: Uuid,
     pub(crate) chunk_index: usize,
+    pub(crate) knowledge_base_id: Uuid,
     pub(crate) content_hash: String,
+    pub(crate) provider: String,
+    pub(crate) model: String,
     pub(crate) vector: Vec<f32>,
 }
 
@@ -207,8 +211,8 @@ impl Database {
         )
         .execute(&self.pool)
         .await?;
-        // Keep the legacy one-vector table so upgrades remain non-destructive.
-        // Active retrieval uses document_embedding_chunks and rebuilds old documents lazily.
+        // Keep both SQL vector tables so upgrades remain non-destructive. They are migration
+        // sources only; active retrieval uses the embedded HNSW files managed by SearchEngine.
         db_query!(
             self,
             "CREATE TABLE IF NOT EXISTS document_embeddings (
@@ -1115,57 +1119,17 @@ impl Database {
             .collect()
     }
 
-    pub(crate) async fn replace_document_embedding_chunks(
+    pub(crate) async fn list_document_embeddings(
         &self,
-        document_id: Uuid,
-        knowledge_base_id: Uuid,
-        provider: &str,
-        model: &str,
-        chunks: &[NewDocumentEmbeddingChunk],
-    ) -> Result<(), AppError> {
-        let now = Utc::now().to_rfc3339();
-        let mut transaction = self.pool.begin().await?;
-        db_query!(
+    ) -> Result<Vec<DocumentEmbedding>, AppError> {
+        let rows = db_query!(
             self,
-            "DELETE FROM document_embedding_chunks WHERE document_id = ?"
+            "SELECT document_id, knowledge_base_id, content_hash, provider, model, dimensions, embedding
+             FROM document_embeddings",
         )
-        .bind(document_id.to_string())
-        .execute(&mut *transaction)
+        .fetch_all(&self.pool)
         .await?;
-        db_query!(
-            self,
-            "DELETE FROM document_embeddings WHERE document_id = ?"
-        )
-        .bind(document_id.to_string())
-        .execute(&mut *transaction)
-        .await?;
-        for chunk in chunks {
-            let embedding = to_string(&chunk.vector)?;
-            db_query!(
-                self,
-                "INSERT INTO document_embedding_chunks
-                 (document_id, chunk_index, knowledge_base_id, content_hash, provider, model, dimensions, embedding, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            )
-            .bind(document_id.to_string())
-            .bind(i32::try_from(chunk.chunk_index).map_err(|_| {
-                AppError::Internal("embedding chunk index exceeds database range".to_string())
-            })?)
-            .bind(knowledge_base_id.to_string())
-            .bind(&chunk.content_hash)
-            .bind(provider)
-            .bind(model)
-            .bind(i32::try_from(chunk.vector.len()).map_err(|_| {
-                AppError::Internal("embedding dimensions exceed database range".to_string())
-            })?)
-            .bind(embedding)
-            .bind(&now)
-            .bind(&now)
-            .execute(&mut *transaction)
-            .await?;
-        }
-        transaction.commit().await?;
-        Ok(())
+        rows.into_iter().map(row_to_document_embedding).collect()
     }
 
     pub(crate) async fn delete_document_embedding_chunks(
@@ -1498,6 +1462,24 @@ fn row_to_document_version(row: sqlx::any::AnyRow) -> Result<DocumentVersion, Ap
     Ok(DocumentVersion {
         content: row.try_get("content")?,
         saved_at: parse_datetime_str(row.try_get("saved_at")?)?,
+    })
+}
+
+fn row_to_document_embedding(row: sqlx::any::AnyRow) -> Result<DocumentEmbedding, AppError> {
+    let vector: Vec<f32> = from_str(row.try_get("embedding")?)?;
+    let dimensions: i32 = row.try_get("dimensions")?;
+    if dimensions < 0 || dimensions as usize != vector.len() {
+        return Err(AppError::Internal(
+            "stored embedding dimensions do not match vector data".to_string(),
+        ));
+    }
+    Ok(DocumentEmbedding {
+        document_id: parse_uuid_str(row.try_get("document_id")?)?,
+        knowledge_base_id: parse_uuid_str(row.try_get("knowledge_base_id")?)?,
+        content_hash: row.try_get("content_hash")?,
+        provider: row.try_get("provider")?,
+        model: row.try_get("model")?,
+        vector,
     })
 }
 

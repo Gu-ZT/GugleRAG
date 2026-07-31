@@ -78,10 +78,10 @@ GugleRAG 是一个自托管团队知识库，提供 Markdown 文档、REST API�
 └── AGENTS.md            # Agent/开发说明
 ```
 
-后端通过 SQLx 持久化用户、工作区、团队、成员关系、知识库、文档、版本、邀请和文档嵌入向量。运行时配置接受 SQLite、MySQL 和
-PostgreSQL 的 `DATABASE_URL`。`document_embedding_chunks` 是数据库中立的持久化向量索引：文档会被切分为带重叠的文本块，
-每个文本块的向量以 JSON 保存，并记录提供方、模型、维度和内容哈希，再由 Rust 计算余弦相似度并将最高匹配块聚合回文档。
-升级期间会保留旧的 `document_embeddings` 表，但当前检索不再使用它。
+后端通过 SQLx 持久化用户、工作区、团队、成员关系、知识库、文档、版本、邀请和文档元数据。运行时配置接受 SQLite、MySQL 和
+PostgreSQL 的 `DATABASE_URL`。活动向量检索使用 Rust 内嵌的 HNSW 索引：每个知识库在 `VECTOR_INDEX_PATH`（默认
+`data/vector-index`）下保存一个二进制索引文件，因此不需要额外部署向量数据库服务。旧版本的 SQL 向量表会作为迁移来源保留，
+向量成功重建到 HNSW 后会被清理。SQL 仍是文档内容和权限的事实来源，HNSW 是可重建的派生索引。
 
 ## 首次运行
 
@@ -241,6 +241,7 @@ ID 仍会按 MCP 作用域和知识库归属校验。搜索结果会包含 `work
 - `EMBEDDING_URL=https://api.siliconflow.cn/v1/embeddings`
 - `SILICONFLOW_URL=https://api.siliconflow.cn`
 - SiliconFlow 嵌入或重排使用 `SILICONFLOW_API_KEY=sk-...`
+- `VECTOR_INDEX_PATH=data/vector-index`
 
 初始化向导默认选择 SiliconFlow 与 `BAAI/bge-m3`。默认嵌入请求地址是完整的
 `https://api.siliconflow.cn/v1/embeddings`；`SILICONFLOW_URL` 仍是用于推导重排地址的 API 根地址。`local`
@@ -248,9 +249,10 @@ ID 仍会按 MCP 作用域和知识库归属校验。搜索结果会包含 `work
 
 每个非文件夹文档都会保留标题和标签作为上下文，并根据已配置模型的输入上限使用保守的字符窗口切分正文：512 token 的 BGE-large/BCE
 模型使用 384 字符，8,192 token 的 BGE-M3 模型使用 6,144 字符，32,768 token 的 Qwen3-Embedding 模型使用 8,192 字符，其他模型使用
-4,000 字符回退值；文本块之间保留少量重叠。每个文本块的向量写入 `document_embedding_chunks`。只要文本块内容哈希以及提供方、模型没有变化，
-后续搜索就会复用已有向量；搜索按命中的最高分文本块为文档排序，可选重排服务也接收最佳匹配文本块。服务启动时会补建缺失或过期文本块；首次搜索也会
-按需建立索引，因此旧版本文档和一文档一向量索引会自动迁移，不需要单独导出数据。
+4,000 字符回退值；文本块之间保留少量重叠。文本块向量、文本、内容哈希、提供方和模型会保存到对应知识库的 HNSW 文件。只要文档集合、文本块
+哈希以及提供方、模型没有变化，后续搜索就会复用已有索引；否则会重建索引。搜索按命中的最高分文本块为文档排序，可选重排服务也接收最佳匹配
+文本块。服务启动时会补建缺失或过期索引；首次搜索也会按需建立索引。旧版本 SQL 向量会在可以匹配当前单块布局时自动迁移，不匹配时重新生成，
+不需要单独导出数据。
 
 重排功能为可选项，由以下配置控制：
 

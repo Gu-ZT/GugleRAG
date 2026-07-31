@@ -51,6 +51,7 @@ pub(crate) async fn setup_status(State(state): State<AppState>) -> Json<Value> {
             "embedding_provider": state.config.embedding_provider,
             "embedding_model": state.config.embedding_model,
             "embedding_url": state.config.embedding_url,
+            "vector_index_path": state.config.vector_index_path,
             "reranker_enabled": state.config.reranker_enabled,
             "reranker_provider": state.config.reranker_provider,
             "reranker_model": state.config.reranker_model,

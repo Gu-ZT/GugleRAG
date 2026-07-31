@@ -2,6 +2,11 @@
 
 All notable changes to GugleRAG are documented in this file.
 
+## [0.3.0] - 2026-07-31
+
+- Replaced SQL JSON vector retrieval with embedded, knowledge-base-scoped Rust HNSW indexes that persist under `VECTOR_INDEX_PATH` and rebuild when stale.
+- Migrated legacy chunk and one-vector SQL records into HNSW when compatible, with regeneration for documents whose chunk layout changed.
+
 ## [0.2.0] - 2026-07-31
 
 - Added persistent, vendor-neutral document embeddings with cosine vector retrieval.

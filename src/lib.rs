@@ -10,9 +10,10 @@ mod embedding;
 pub mod logging;
 mod mcp;
 mod reranker;
+mod vector_store;
 
 use axum::Router;
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, path::Path, sync::Arc};
 use tokio::{net::TcpListener, sync::watch};
 use tower_http::{
     services::{ServeDir, ServeFile},
@@ -52,6 +53,17 @@ pub async fn build_test_router(
     jwt_secret: &str,
 ) -> Result<Router, error::AppError> {
     build_test_router_with_registration(database_url, jwt_secret, true).await
+}
+
+#[doc(hidden)]
+pub async fn build_test_router_with_vector_index(
+    database_url: &str,
+    jwt_secret: &str,
+    vector_index_path: &Path,
+) -> Result<Router, error::AppError> {
+    let mut config = config::Config::for_test(database_url.to_string(), jwt_secret.to_string());
+    config.vector_index_path = vector_index_path.to_path_buf();
+    build_test_router_from_config(config).await
 }
 
 pub async fn build_test_router_with_registration(
@@ -132,7 +144,12 @@ pub async fn run() {
             setup_required = config.setup_required,
             mcp_enabled = config.mcp_enabled,
             embedding_provider = %config.embedding_provider,
+            embedding_model = %config.embedding_model,
+            embedding_url = %config.embedding_url,
+            vector_index_path = %config.vector_index_path.display(),
             reranker_enabled = config.reranker_enabled,
+            reranker_provider = %config.reranker_provider,
+            reranker_model = %config.reranker_model,
             "loaded runtime configuration"
         );
         config::prepare_database_path(&config.database).await;
@@ -150,9 +167,9 @@ pub async fn run() {
                 .expect("failed to configure search engine"),
         );
         match search.reindex_all().await {
-            Ok(indexed_documents) => info!(indexed_documents, "document embedding index is ready"),
+            Ok(indexed_documents) => info!(indexed_documents, "document HNSW indexes are ready"),
             Err(error) => {
-                warn!("failed to rebuild document embeddings: {error}");
+                warn!("failed to rebuild HNSW document index: {error}");
             }
         }
 

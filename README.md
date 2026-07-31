@@ -80,11 +80,12 @@ agents.
 ```
 
 The backend stores users, workspaces, teams, memberships, knowledge bases, documents, versions, invitations, and
-document embeddings through SQLx. Runtime configuration accepts SQLite, MySQL, and PostgreSQL `DATABASE_URL` values. The
-`document_embedding_chunks` is a vendor-neutral persistent vector index: each document is split into overlapping text
-chunks, and each chunk stores its vector as JSON together with the provider, model, dimension, and content hash. Rust
-calculates cosine similarity and aggregates the best matching chunk back to its document. The legacy
-`document_embeddings` table is retained during upgrades and is no longer used for active retrieval.
+document metadata through SQLx. Runtime configuration accepts SQLite, MySQL, and PostgreSQL `DATABASE_URL` values.
+Active vector retrieval uses an embedded Rust HNSW index. Each knowledge base is persisted as one binary file under
+`VECTOR_INDEX_PATH` (default `data/vector-index`), so the server remains a single executable without a separate vector
+database service. SQL vector records from previous versions are kept as migration sources and are removed after their
+vectors have been rebuilt into HNSW. SQL remains the source of truth for document content and permissions; HNSW is a
+rebuildable derived index.
 
 ## First Run
 
@@ -255,6 +256,7 @@ Embedding and vector indexing are controlled by:
 - `EMBEDDING_URL=https://api.siliconflow.cn/v1/embeddings`
 - `SILICONFLOW_URL=https://api.siliconflow.cn`
 - `SILICONFLOW_API_KEY=sk-...` for SiliconFlow embeddings or reranking
+- `VECTOR_INDEX_PATH=data/vector-index`
 
 The setup wizard defaults to SiliconFlow with `BAAI/bge-m3`. The default embedding request URL is the complete
 `https://api.siliconflow.cn/v1/embeddings` endpoint; `SILICONFLOW_URL` remains the API base used to derive the reranker
@@ -264,11 +266,12 @@ offline provider intended for tests and installations that are not ready to call
 For every non-folder document, GugleRAG keeps the title and tags as context on overlapping content chunks. The chunk
 window is selected from the configured model's documented input limit with a conservative character budget: 384
 characters for the 512-token BGE-large/BCE models, 6,144 characters for the 8,192-token BGE-M3 models, and 8,192
-characters for the 32,768-token Qwen3-Embedding models. Other models use a 4,000-character fallback. One vector per
-chunk is stored in `document_embedding_chunks`, and chunks are reused while their content hashes and provider/model
-settings remain unchanged. Search ranks a document by its best matching chunk and sends that chunk to the optional
-reranker. The server rebuilds missing or stale chunks at startup; a first search also performs lazy indexing, so
-documents and one-vector indexes from earlier versions are migrated without a separate export step.
+characters for the 32,768-token Qwen3-Embedding models. Other models use a 4,000-character fallback. Chunk vectors
+and their text, content hashes, provider, and model are stored in the knowledge base's HNSW file. Existing HNSW
+indexes are reused when the document set, content hashes, provider, and model match; otherwise the index is rebuilt.
+Search ranks a document by its best matching chunk and sends that chunk to the optional reranker. The server rebuilds
+missing or stale indexes at startup; a first search also performs lazy indexing. SQL vectors from earlier versions are
+automatically migrated when possible and regenerated when the old vector does not represent the current chunk layout.
 
 Reranking is optional and controlled by:
 

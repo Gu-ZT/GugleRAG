@@ -23,6 +23,7 @@ pub struct Config {
     pub(crate) embedding_provider: String,
     pub(crate) embedding_model: String,
     pub(crate) embedding_url: String,
+    pub(crate) vector_index_path: PathBuf,
     pub(crate) siliconflow_url: String,
     pub(crate) siliconflow_api_key: String,
     pub(crate) reranker_enabled: bool,
@@ -82,6 +83,9 @@ impl Config {
             value("SILICONFLOW_URL").unwrap_or_else(|| "https://api.siliconflow.cn".to_string());
         let embedding_url = value("EMBEDDING_URL")
             .unwrap_or_else(|| siliconflow_endpoint_url(&siliconflow_url, "/v1/embeddings"));
+        let vector_index_path = value("VECTOR_INDEX_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("data/vector-index"));
         Self {
             host: value("SERVER_HOST").unwrap_or_else(|| "0.0.0.0".to_string()),
             port: value("SERVER_PORT")
@@ -98,6 +102,7 @@ impl Config {
             embedding_provider: value("EMBEDDING_PROVIDER").unwrap_or_else(|| "stub".to_string()),
             embedding_model: value("EMBEDDING_MODEL").unwrap_or_else(|| "none".to_string()),
             embedding_url,
+            vector_index_path,
             siliconflow_url,
             siliconflow_api_key: value("SILICONFLOW_API_KEY").unwrap_or_default(),
             reranker_enabled: parse_env_bool(value("RERANKER_ENABLED").as_deref(), false),
@@ -123,6 +128,8 @@ impl Config {
             embedding_provider: "stub".to_string(),
             embedding_model: "none".to_string(),
             embedding_url: "https://api.siliconflow.cn/v1/embeddings".to_string(),
+            vector_index_path: env::temp_dir()
+                .join(format!("guglerag-vector-index-{}", Uuid::new_v4())),
             siliconflow_url: "https://api.siliconflow.cn".to_string(),
             siliconflow_api_key: String::new(),
             reranker_enabled: false,
@@ -144,6 +151,7 @@ impl Config {
             && self.embedding_provider == other.embedding_provider
             && self.embedding_model == other.embedding_model
             && self.embedding_url == other.embedding_url
+            && self.vector_index_path == other.vector_index_path
             && self.siliconflow_url == other.siliconflow_url
             && self.siliconflow_api_key == other.siliconflow_api_key
             && self.reranker_enabled == other.reranker_enabled
@@ -202,6 +210,8 @@ pub struct SetupRequest {
     pub embedding_model: String,
     #[serde(default)]
     pub embedding_url: String,
+    #[serde(default = "default_vector_index_path")]
+    pub vector_index_path: String,
     pub siliconflow_url: Option<String>,
     pub siliconflow_api_key: Option<String>,
     pub reranker_enabled: bool,
@@ -379,6 +389,14 @@ pub fn render_env_file(input: &SetupRequest) -> String {
         ),
         format!("EMBEDDING_MODEL={}", env_escape(&input.embedding_model)),
         format!("EMBEDDING_URL={}", env_escape(&embedding_url)),
+        format!(
+            "VECTOR_INDEX_PATH={}",
+            env_escape(if input.vector_index_path.trim().is_empty() {
+                "data/vector-index"
+            } else {
+                input.vector_index_path.trim()
+            })
+        ),
         format!("SILICONFLOW_URL={}", env_escape(siliconflow_url)),
         format!("SILICONFLOW_API_KEY={}", env_escape(siliconflow_api_key)),
         format!("RERANKER_ENABLED={}", input.reranker_enabled),
@@ -411,10 +429,14 @@ fn default_registration_enabled() -> bool {
     true
 }
 
+fn default_vector_index_path() -> String {
+    "data/vector-index".to_string()
+}
+
 fn env_escape(value: &str) -> String {
     let needs_quotes = value
         .chars()
-        .any(|ch| ch.is_whitespace() || matches!(ch, '"' | '\'' | '#' | '='));
+        .any(|ch| ch.is_whitespace() || matches!(ch, '"' | '\'' | '#' | '=' | '\\'));
     if needs_quotes {
         format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
     } else {

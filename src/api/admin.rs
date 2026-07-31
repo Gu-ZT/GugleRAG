@@ -28,6 +28,8 @@ pub(crate) struct AdminConfigRequest {
     embedding_model: String,
     #[serde(default)]
     embedding_url: String,
+    #[serde(default)]
+    vector_index_path: Option<String>,
     siliconflow_url: String,
     #[serde(default)]
     siliconflow_api_key: Option<String>,
@@ -91,6 +93,10 @@ pub(crate) async fn save_config(
     } else {
         input.embedding_url
     };
+    let vector_index_path = input
+        .vector_index_path
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| current.vector_index_path.to_string_lossy().into_owned());
     let setup = SetupRequest {
         server_host: input.server_host,
         server_port: input.server_port,
@@ -102,6 +108,7 @@ pub(crate) async fn save_config(
         embedding_provider: input.embedding_provider,
         embedding_model: input.embedding_model,
         embedding_url,
+        vector_index_path,
         siliconflow_url: Some(input.siliconflow_url),
         siliconflow_api_key: Some(siliconflow_api_key),
         reranker_enabled: input.reranker_enabled,
@@ -279,6 +286,7 @@ fn config_response(state: &AppState, saved: &Config) -> Value {
             "embedding_provider": saved.embedding_provider,
             "embedding_model": saved.embedding_model,
             "embedding_url": saved.embedding_url,
+            "vector_index_path": saved.vector_index_path,
             "siliconflow_url": saved.siliconflow_url,
             "reranker_enabled": saved.reranker_enabled,
             "reranker_provider": saved.reranker_provider,

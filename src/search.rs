@@ -1,10 +1,11 @@
 use crate::{
     config::Config,
-    db::{Database, DocumentEmbeddingChunk, NewDocumentEmbeddingChunk},
+    db::{Database, DocumentEmbedding, DocumentEmbeddingChunk},
     domain::{Document, SearchResult},
     embedding::{EmbeddingService, cosine_similarity},
     error::AppError,
     reranker::RerankerService,
+    vector_store::{VectorIndexEntry, VectorIndexPoint, VectorStore},
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -30,12 +31,19 @@ pub(crate) struct SearchEngine {
     database: Database,
     embedder: EmbeddingService,
     reranker: Option<RerankerService>,
+    vector_store: VectorStore,
     embedding_lock: Arc<Mutex<()>>,
 }
 
 #[derive(Clone)]
 struct RankedDocument<'a> {
     document: &'a Document,
+    text: String,
+    score: f32,
+}
+
+struct BestChunk {
+    chunk_index: usize,
     text: String,
     score: f32,
 }
@@ -51,6 +59,7 @@ struct EmbeddingChunkInput {
 struct IndexedChunk {
     chunk_index: usize,
     text: String,
+    content_hash: String,
     vector: Vec<f32>,
 }
 
@@ -72,14 +81,22 @@ impl SearchEngine {
             database,
             embedder: EmbeddingService::from_config(config)?,
             reranker: RerankerService::from_config(config)?,
+            vector_store: VectorStore::new(config.vector_index_path.clone())?,
             embedding_lock: Arc::new(Mutex::new(())),
         })
     }
 
     pub(crate) async fn reindex_all(&self) -> Result<usize, AppError> {
         let documents = self.database.all_documents_for_search().await?;
-        let (_, indexed) = self.ensure_embeddings(&documents).await?;
-        Ok(indexed)
+        let vectors = self.ensure_embeddings(&documents).await?;
+        Ok(vectors.len())
+    }
+
+    pub(crate) fn remove_knowledge_base_index(
+        &self,
+        knowledge_base_id: Uuid,
+    ) -> Result<(), AppError> {
+        self.vector_store.remove_index(knowledge_base_id)
     }
 
     pub(crate) async fn search_documents(
@@ -101,7 +118,7 @@ impl SearchEngine {
             return Ok(Vec::new());
         }
 
-        let (vectors, _) = self.ensure_embeddings(documents).await?;
+        let vectors = self.ensure_embeddings(documents).await?;
         let query_text = query
             .trim()
             .chars()
@@ -120,27 +137,84 @@ impl SearchEngine {
                 AppError::Internal("embedding provider returned no query vector".to_string())
             })?;
         let use_lexical_score = self.embedder.is_stub();
-        let mut ranked = searchable_documents
-            .into_iter()
-            .filter_map(|document| {
-                let chunks = vectors.get(&document.id)?;
-                let best_chunk = chunks.iter().max_by(|left, right| {
+        let allowed_documents = searchable_documents
+            .iter()
+            .map(|document| document.id)
+            .collect::<HashSet<_>>();
+        let mut best_chunks = HashMap::<Uuid, BestChunk>::new();
+        if use_lexical_score {
+            for document in &searchable_documents {
+                let Some(chunks) = vectors.get(&document.id) else {
+                    continue;
+                };
+                if let Some(best_chunk) = chunks.iter().max_by(|left, right| {
                     cosine_similarity(&left.vector, &query_vector)
                         .total_cmp(&cosine_similarity(&right.vector, &query_vector))
                         .then_with(|| right.chunk_index.cmp(&left.chunk_index))
-                })?;
-                let semantic_score = cosine_similarity(&best_chunk.vector, &query_vector);
+                }) {
+                    best_chunks.insert(
+                        document.id,
+                        BestChunk {
+                            chunk_index: best_chunk.chunk_index,
+                            text: best_chunk.text.clone(),
+                            score: cosine_similarity(&best_chunk.vector, &query_vector),
+                        },
+                    );
+                }
+            }
+        } else {
+            let knowledge_base_ids = searchable_documents
+                .iter()
+                .map(|document| document.knowledge_base_id)
+                .collect::<HashSet<_>>();
+            let candidate_count = limit
+                .saturating_mul(RERANK_CANDIDATE_MULTIPLIER)
+                .max(limit)
+                .saturating_mul(4)
+                .clamp(64, 256);
+            for knowledge_base_id in knowledge_base_ids {
+                for hit in
+                    self.vector_store
+                        .search(knowledge_base_id, &query_vector, candidate_count)
+                {
+                    if !allowed_documents.contains(&hit.entry.document_id) {
+                        continue;
+                    }
+                    let replace = best_chunks
+                        .get(&hit.entry.document_id)
+                        .is_none_or(|current| {
+                            hit.score > current.score
+                                || (hit.score == current.score
+                                    && hit.entry.chunk_index < current.chunk_index)
+                        });
+                    if replace {
+                        best_chunks.insert(
+                            hit.entry.document_id,
+                            BestChunk {
+                                chunk_index: hit.entry.chunk_index,
+                                text: hit.entry.text,
+                                score: hit.score,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+        let mut ranked = searchable_documents
+            .into_iter()
+            .filter_map(|document| {
+                let best_chunk = best_chunks.remove(&document.id)?;
                 let score = if use_lexical_score {
                     lexical_score(document, &terms) as f32
                 } else {
-                    semantic_score
+                    best_chunk.score
                 };
                 if use_lexical_score && score == 0.0 {
                     return None;
                 }
                 Some(RankedDocument {
                     document,
-                    text: best_chunk.text.clone(),
+                    text: best_chunk.text,
                     score,
                 })
             })
@@ -203,52 +277,152 @@ impl SearchEngine {
     async fn ensure_embeddings(
         &self,
         documents: &[Document],
-    ) -> Result<(HashMap<Uuid, Vec<IndexedChunk>>, usize), AppError> {
+    ) -> Result<HashMap<Uuid, Vec<IndexedChunk>>, AppError> {
         let _lock = self.embedding_lock.lock().await;
-        let mut stored_by_document = HashMap::<Uuid, Vec<DocumentEmbeddingChunk>>::new();
-        for embedding in self.database.list_document_embedding_chunks().await? {
-            stored_by_document
-                .entry(embedding.document_id)
-                .or_default()
-                .push(embedding);
-        }
-        let mut vectors = HashMap::new();
-        let mut pending_documents = Vec::new();
-        let mut pending_chunks = Vec::new();
+        let mut chunks_by_document = HashMap::<Uuid, Vec<EmbeddingChunkInput>>::new();
+        let mut expected_by_knowledge_base = HashMap::<Uuid, Vec<VectorIndexEntry>>::new();
         for document in documents.iter().filter(|document| !document.is_folder) {
             let chunks = document_embedding_chunks(document, self.embedder.model());
-            let mut stored_chunks = stored_by_document.remove(&document.id).unwrap_or_default();
-            stored_chunks.sort_by_key(|chunk| chunk.chunk_index);
-            let reusable = stored_chunks.len() == chunks.len()
-                && chunks.iter().zip(&stored_chunks).all(|(chunk, stored)| {
-                    stored.chunk_index == chunk.chunk_index
-                        && stored.knowledge_base_id == document.knowledge_base_id
-                        && stored.content_hash == chunk.content_hash
-                        && stored.provider == self.embedder.provider_name()
-                        && stored.model == self.embedder.model()
+            expected_by_knowledge_base
+                .entry(document.knowledge_base_id)
+                .or_default()
+                .extend(chunks.iter().map(|chunk| VectorIndexEntry {
+                    document_id: document.id,
+                    knowledge_base_id: document.knowledge_base_id,
+                    chunk_index: chunk.chunk_index,
+                    content_hash: chunk.content_hash.clone(),
+                    text: chunk.text.clone(),
+                }));
+            chunks_by_document.insert(document.id, chunks);
+        }
+
+        let mut vectors = HashMap::new();
+        let mut current_points = HashMap::<(Uuid, usize), VectorIndexPoint>::new();
+        let mut current_knowledge_bases = HashSet::new();
+        for (knowledge_base_id, expected) in &expected_by_knowledge_base {
+            if let Some(points) = self.vector_store.current_points(
+                *knowledge_base_id,
+                self.embedder.provider_name(),
+                self.embedder.model(),
+                expected,
+            ) {
+                current_knowledge_bases.insert(*knowledge_base_id);
+                for point in points {
+                    current_points
+                        .insert((point.entry.document_id, point.entry.chunk_index), point);
+                }
+            }
+        }
+
+        let mut missing_documents = Vec::new();
+        for document in documents.iter().filter(|document| !document.is_folder) {
+            let chunks = chunks_by_document.remove(&document.id).ok_or_else(|| {
+                AppError::Internal("missing document embedding chunks".to_string())
+            })?;
+            let current_chunks = chunks
+                .iter()
+                .map(|chunk| current_points.get(&(document.id, chunk.chunk_index)))
+                .collect::<Option<Vec<_>>>();
+            if let Some(current_chunks) = current_chunks {
+                vectors.insert(
+                    document.id,
+                    chunks
+                        .iter()
+                        .zip(current_chunks)
+                        .map(|(chunk, point)| IndexedChunk {
+                            chunk_index: chunk.chunk_index,
+                            text: chunk.text.clone(),
+                            content_hash: chunk.content_hash.clone(),
+                            vector: point.vector.clone(),
+                        })
+                        .collect(),
+                );
+            } else {
+                missing_documents.push(PendingDocument {
+                    document_id: document.id,
+                    knowledge_base_id: document.knowledge_base_id,
+                    chunks,
                 });
+            }
+        }
+
+        let mut stored_by_document = HashMap::<Uuid, Vec<DocumentEmbeddingChunk>>::new();
+        let mut legacy_by_document = HashMap::<Uuid, DocumentEmbedding>::new();
+        if !missing_documents.is_empty() {
+            for embedding in self.database.list_document_embedding_chunks().await? {
+                stored_by_document
+                    .entry(embedding.document_id)
+                    .or_default()
+                    .push(embedding);
+            }
+            for embedding in self.database.list_document_embeddings().await? {
+                legacy_by_document.insert(embedding.document_id, embedding);
+            }
+        }
+
+        let mut pending_documents = Vec::new();
+        let mut pending_chunks = Vec::new();
+        for pending in missing_documents {
+            let mut stored_chunks = stored_by_document
+                .remove(&pending.document_id)
+                .unwrap_or_default();
+            stored_chunks.sort_by_key(|chunk| chunk.chunk_index);
+            let reusable = stored_chunks.len() == pending.chunks.len()
+                && pending
+                    .chunks
+                    .iter()
+                    .zip(&stored_chunks)
+                    .all(|(chunk, stored)| {
+                        stored.chunk_index == chunk.chunk_index
+                            && stored.knowledge_base_id == pending.knowledge_base_id
+                            && stored.content_hash == chunk.content_hash
+                            && stored.provider == self.embedder.provider_name()
+                            && stored.model == self.embedder.model()
+                    });
             if reusable {
-                let indexed_chunks = chunks
+                let indexed_chunks = pending
+                    .chunks
                     .iter()
                     .zip(stored_chunks)
                     .map(|(chunk, stored)| IndexedChunk {
                         chunk_index: chunk.chunk_index,
                         text: chunk.text.clone(),
+                        content_hash: chunk.content_hash.clone(),
                         vector: stored.vector,
                     })
                     .collect();
-                vectors.insert(document.id, indexed_chunks);
+                vectors.insert(pending.document_id, indexed_chunks);
+            } else if pending.chunks.len() == 1
+                && legacy_by_document
+                    .get(&pending.document_id)
+                    .is_some_and(|stored| {
+                        stored.knowledge_base_id == pending.knowledge_base_id
+                            && stored.content_hash == pending.chunks[0].content_hash
+                            && stored.provider == self.embedder.provider_name()
+                            && stored.model == self.embedder.model()
+                    })
+            {
+                let stored = legacy_by_document
+                    .remove(&pending.document_id)
+                    .ok_or_else(|| {
+                        AppError::Internal("missing legacy document embedding".to_string())
+                    })?;
+                vectors.insert(
+                    pending.document_id,
+                    vec![IndexedChunk {
+                        chunk_index: pending.chunks[0].chunk_index,
+                        content_hash: pending.chunks[0].content_hash.clone(),
+                        text: pending.chunks[0].text.clone(),
+                        vector: stored.vector,
+                    }],
+                );
             } else {
-                pending_chunks.extend(chunks.iter().map(|chunk| PendingChunk {
-                    document_id: document.id,
+                pending_chunks.extend(pending.chunks.iter().map(|chunk| PendingChunk {
+                    document_id: pending.document_id,
                     chunk_index: chunk.chunk_index,
                     text: chunk.text.clone(),
                 }));
-                pending_documents.push(PendingDocument {
-                    document_id: document.id,
-                    knowledge_base_id: document.knowledge_base_id,
-                    chunks,
-                });
+                pending_documents.push(pending);
             }
         }
 
@@ -269,14 +443,13 @@ impl SearchEngine {
             }
         }
 
-        let mut indexed = 0;
         for pending in pending_documents {
             let document_id = pending.document_id;
-            let records = pending
+            let indexed_chunks = pending
                 .chunks
-                .iter()
+                .into_iter()
                 .map(|chunk| {
-                    Ok(NewDocumentEmbeddingChunk {
+                    Ok(IndexedChunk {
                         chunk_index: chunk.chunk_index,
                         content_hash: chunk.content_hash.clone(),
                         vector: generated_vectors
@@ -286,32 +459,48 @@ impl SearchEngine {
                                     "missing generated embedding for document chunk".to_string(),
                                 )
                             })?,
+                        text: chunk.text,
                     })
                 })
                 .collect::<Result<Vec<_>, AppError>>()?;
-            self.database
-                .replace_document_embedding_chunks(
-                    document_id,
-                    pending.knowledge_base_id,
+            vectors.insert(document_id, indexed_chunks);
+        }
+
+        let mut points_by_knowledge_base = HashMap::<Uuid, Vec<VectorIndexPoint>>::new();
+        for document in documents.iter().filter(|document| !document.is_folder) {
+            let chunks = vectors.get(&document.id).ok_or_else(|| {
+                AppError::Internal("missing document vectors after embedding".to_string())
+            })?;
+            points_by_knowledge_base
+                .entry(document.knowledge_base_id)
+                .or_default()
+                .extend(chunks.iter().map(|chunk| VectorIndexPoint {
+                    entry: VectorIndexEntry {
+                        document_id: document.id,
+                        knowledge_base_id: document.knowledge_base_id,
+                        chunk_index: chunk.chunk_index,
+                        content_hash: chunk.content_hash.clone(),
+                        text: chunk.text.clone(),
+                    },
+                    vector: chunk.vector.clone(),
+                }));
+        }
+        for (knowledge_base_id, points) in points_by_knowledge_base {
+            if !current_knowledge_bases.contains(&knowledge_base_id) {
+                self.vector_store.replace_index(
+                    knowledge_base_id,
                     self.embedder.provider_name(),
                     self.embedder.model(),
-                    &records,
-                )
-                .await?;
-            let indexed_chunks = pending
-                .chunks
-                .into_iter()
-                .zip(records)
-                .map(|(chunk, record)| IndexedChunk {
-                    chunk_index: chunk.chunk_index,
-                    text: chunk.text,
-                    vector: record.vector,
-                })
-                .collect();
-            vectors.insert(document_id, indexed_chunks);
-            indexed += 1;
+                    points,
+                )?;
+            }
         }
-        Ok((vectors, indexed))
+        for document in documents.iter().filter(|document| !document.is_folder) {
+            self.database
+                .delete_document_embedding_chunks(document.id)
+                .await?;
+        }
+        Ok(vectors)
     }
 }
 

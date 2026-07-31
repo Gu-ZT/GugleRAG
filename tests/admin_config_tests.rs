@@ -85,6 +85,10 @@ async fn only_administrators_can_update_configuration_and_restart() {
     assert_eq!(initial["secrets"]["jwt_secret_configured"], true);
     assert!(initial["current"].get("jwt_secret").is_none());
     assert!(initial["current"].get("siliconflow_api_key").is_none());
+    let initial_vector_index_path = initial["current"]["vector_index_path"]
+        .as_str()
+        .expect("vector index path")
+        .to_string();
     let env_path = initial["env_path"].as_str().expect("temporary env path");
 
     let payload = json!({
@@ -131,6 +135,7 @@ async fn only_administrators_can_update_configuration_and_restart() {
     assert!(env_file.contains("SERVER_PORT=9191"));
     assert!(env_file.contains("RERANKER_ENABLED=true"));
     assert!(env_file.contains("MCP_PUBLIC_URL=https://kb.example.com"));
+    assert!(env_file.contains("VECTOR_INDEX_PATH=\""));
 
     let (status, persisted) = json_request(
         &app,
@@ -143,6 +148,10 @@ async fn only_administrators_can_update_configuration_and_restart() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(persisted["current"]["server_port"], 9191);
     assert_eq!(persisted["current"]["registration_enabled"], false);
+    assert_eq!(
+        persisted["current"]["vector_index_path"],
+        initial_vector_index_path
+    );
     assert_eq!(persisted["restart_required"], true);
 
     let (status, _) = json_request(
