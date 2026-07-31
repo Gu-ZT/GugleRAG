@@ -9,6 +9,7 @@ fn valid_setup() -> SetupRequest {
         server_port: 8080,
         database_url: "sqlite://data/test.db".to_string(),
         jwt_secret: "a-secure-test-secret-that-is-long-enough".to_string(),
+        registration_enabled: true,
         embedding_provider: "stub".to_string(),
         embedding_model: "none".to_string(),
         siliconflow_url: None,
@@ -66,6 +67,7 @@ fn setup_validation_and_env_rendering_include_reranker_settings() {
 
     let output = render_env_file(&input);
     assert!(output.contains("DATABASE_URL=sqlite://data/test.db"));
+    assert!(output.contains("REGISTRATION_ENABLED=true"));
     assert!(output.contains("RERANKER_ENABLED=true"));
     assert!(output.contains("RERANKER_PROVIDER=custom_http"));
     assert!(output.contains("RERANKER_MODEL=BAAI/bge-reranker-v2-m3"));
