@@ -25,6 +25,7 @@ async fn embedding_handler(
     Json(request): Json<Value>,
 ) -> Json<Value> {
     state.embedding_calls.fetch_add(1, Ordering::SeqCst);
+    assert_eq!(request["truncate"], json!(true));
     let inputs = request["input"].as_array().unwrap();
     let data = inputs
         .iter()

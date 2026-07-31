@@ -72,9 +72,10 @@ pub async fn build_test_router_with_retrieval(
     reranker_url: &str,
 ) -> Result<Router, error::AppError> {
     let mut config = config::Config::for_test(database_url.to_string(), jwt_secret.to_string());
-    config.embedding_provider = "local".to_string();
+    config.embedding_provider = "siliconflow".to_string();
     config.embedding_model = "test-embedding".to_string();
     config.embedding_url = embedding_url.to_string();
+    config.siliconflow_api_key = "test-key".to_string();
     config.reranker_enabled = true;
     config.reranker_provider = "custom_http".to_string();
     config.reranker_model = "test-reranker".to_string();
