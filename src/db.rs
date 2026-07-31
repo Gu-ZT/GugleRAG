@@ -593,10 +593,13 @@ impl Database {
     ) -> Result<Vec<KnowledgeBase>, AppError> {
         let rows = db_query!(
             self,
-            "SELECT DISTINCT kb.id, kb.workspace_id, kb.name, kb.description, kb.created_at
+            "SELECT kb.id, kb.workspace_id, kb.name, kb.description, kb.created_at
              FROM knowledge_bases kb JOIN workspaces w ON w.id = kb.workspace_id
-             LEFT JOIN team_members m ON m.team_id = w.team_id AND m.user_id = ?
-             WHERE (w.kind = 'personal' AND w.owner_id = ?) OR m.user_id IS NOT NULL
+             WHERE (w.kind = 'personal' AND w.owner_id = ?)
+                OR EXISTS (
+                    SELECT 1 FROM team_members m
+                    WHERE m.team_id = w.team_id AND m.user_id = ?
+                )
              ORDER BY LOWER(kb.name)",
         )
         .bind(user_id.to_string())
