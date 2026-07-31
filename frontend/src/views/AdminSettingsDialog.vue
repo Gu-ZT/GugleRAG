@@ -36,8 +36,9 @@ const form = reactive<AdminConfigPayload>({
   database_url: "sqlite://data/guglerag.db?mode=rwc",
   jwt_secret: "",
   registration_enabled: true,
-  embedding_provider: "stub",
-  embedding_model: "none",
+  embedding_provider: "siliconflow",
+  embedding_model: "BAAI/bge-m3",
+  embedding_url: "https://api.siliconflow.cn/v1/embeddings",
   siliconflow_url: "https://api.siliconflow.cn",
   siliconflow_api_key: "",
   reranker_enabled: false,
@@ -250,7 +251,10 @@ onMounted(loadConfig);
                 <label>嵌入模型<input v-model.trim="form.embedding_model" /></label>
               </div>
               <div class="field-grid">
+                <label>嵌入调用 URL<input v-model.trim="form.embedding_url" /></label>
                 <label>SiliconFlow URL<input v-model.trim="form.siliconflow_url" /></label>
+              </div>
+              <div class="field-grid">
                 <label>
                   SiliconFlow API Key
                   <span class="secret-input">
@@ -283,7 +287,7 @@ onMounted(loadConfig);
                 </label>
                 <label>重排模型<input v-model.trim="form.reranker_model" /></label>
               </div>
-              <label v-if="form.reranker_enabled && form.reranker_provider === 'custom_http'">
+              <label v-if="form.reranker_enabled && ['local', 'custom_http'].includes(form.reranker_provider)">
                 重排服务 URL
                 <input v-model.trim="form.reranker_url" placeholder="http://127.0.0.1:9000/rerank" />
               </label>

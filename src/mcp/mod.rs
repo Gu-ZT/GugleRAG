@@ -3,7 +3,6 @@ use crate::{
     auth::{self, hash_password},
     domain::{Document, DocumentVersion, KnowledgeBase, Role, User, Workspace, WorkspaceKind},
     error::AppError,
-    search,
 };
 use axum::{
     Json, Router,
@@ -331,7 +330,11 @@ async fn call_mcp_tool(
                 }
                 documents.extend(knowledge_base_documents);
             }
-            let results = search::search_documents(&documents, query, limit)
+            let results = state
+                .search
+                .search_documents(&documents, query, limit)
+                .await
+                .map_err(|error| error.to_string())?
                 .into_iter()
                 .map(|result| {
                     let (workspace_id, knowledge_base_id) =

@@ -6,7 +6,9 @@ pub mod error;
 pub mod search;
 
 mod api;
+mod embedding;
 mod mcp;
+mod reranker;
 
 use axum::Router;
 use std::{net::SocketAddr, sync::Arc};
@@ -21,6 +23,7 @@ use tracing::{info, warn};
 pub struct AppState {
     pub(crate) database: db::Database,
     pub(crate) config: Arc<config::Config>,
+    pub(crate) search: Arc<search::SearchEngine>,
     pub(crate) restart_tx: watch::Sender<bool>,
 }
 
@@ -48,16 +51,43 @@ pub async fn build_test_router_with_registration(
     jwt_secret: &str,
     registration_enabled: bool,
 ) -> Result<Router, error::AppError> {
-    sqlx::any::install_default_drivers();
     let mut config = config::Config::for_test(database_url.to_string(), jwt_secret.to_string());
     config.registration_enabled = registration_enabled;
+    build_test_router_from_config(config).await
+}
+
+#[doc(hidden)]
+pub async fn build_test_router_with_retrieval(
+    database_url: &str,
+    jwt_secret: &str,
+    embedding_url: &str,
+    reranker_url: &str,
+) -> Result<Router, error::AppError> {
+    let mut config = config::Config::for_test(database_url.to_string(), jwt_secret.to_string());
+    config.embedding_provider = "local".to_string();
+    config.embedding_model = "test-embedding".to_string();
+    config.embedding_url = embedding_url.to_string();
+    config.reranker_enabled = true;
+    config.reranker_provider = "custom_http".to_string();
+    config.reranker_model = "test-reranker".to_string();
+    config.reranker_url = reranker_url.to_string();
+    build_test_router_from_config(config).await
+}
+
+async fn build_test_router_from_config(config: config::Config) -> Result<Router, error::AppError> {
+    sqlx::any::install_default_drivers();
     config::prepare_database_path(&config.database).await;
     let database = db::Database::connect(&config.database.url).await?;
     database.migrate().await?;
+    let search = Arc::new(search::SearchEngine::from_config(
+        &config,
+        database.clone(),
+    )?);
     let (restart_tx, _) = watch::channel(false);
     Ok(build_router(AppState {
         database,
         config: Arc::new(config),
+        search,
         restart_tx,
     }))
 }
@@ -81,11 +111,19 @@ pub async fn run() {
             .migrate()
             .await
             .expect("failed to migrate database");
+        let search = Arc::new(
+            search::SearchEngine::from_config(&config, database.clone())
+                .expect("failed to configure search engine"),
+        );
+        if let Err(error) = search.reindex_all().await {
+            warn!("failed to rebuild document embeddings: {error}");
+        }
 
         let (restart_tx, mut restart_rx) = watch::channel(false);
         let state = AppState {
             database: database.clone(),
             config: Arc::new(config.clone()),
+            search,
             restart_tx: restart_tx.clone(),
         };
         let app = build_router(state);

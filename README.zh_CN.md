@@ -66,7 +66,9 @@ GugleRAG 是一个自托管团队知识库，提供 Markdown 文档、REST API�
 │   ├── db.rs            # SQLx 持久化
 │   ├── domain.rs        # 共享领域模型
 │   ├── error.rs         # HTTP 感知的应用错误
-│   ├── search.rs        # 关键词检索与排序
+│   ├── embedding.rs     # 嵌入服务提供方客户端
+│   ├── reranker.rs      # 可选重排服务客户端
+│   ├── search.rs        # 持久化向量检索与排序
 │   ├── lib.rs           # 应用组合
 │   └── main.rs          # 精简的可执行程序入口
 ├── tests/               # 后端集成测试
@@ -75,8 +77,9 @@ GugleRAG 是一个自托管团队知识库，提供 Markdown 文档、REST API�
 └── AGENTS.md            # Agent/开发说明
 ```
 
-后端通过 SQLx 持久化用户、工作区、团队、成员关系、知识库、文档、版本和邀请。运行时配置接受 SQLite、MySQL 和 PostgreSQL 的
-`DATABASE_URL`。
+后端通过 SQLx 持久化用户、工作区、团队、成员关系、知识库、文档、版本、邀请和文档嵌入向量。运行时配置接受 SQLite、MySQL 和
+PostgreSQL 的 `DATABASE_URL`。`document_embeddings` 是数据库中立的持久化向量索引：向量以 JSON 保存，并记录提供方、模型、维度和内容哈希，
+再由 Rust 计算余弦相似度。
 
 ## 首次运行
 
@@ -97,7 +100,7 @@ npm run dev
 - `SERVER_HOST` 和 `SERVER_PORT`
 - SQLite、MySQL 或 PostgreSQL 的 `DATABASE_URL`
 - `JWT_SECRET`
-- 嵌入模型与 SiliconFlow 设置
+- 嵌入模型、完整的 SiliconFlow 调用地址与相关设置
 - 可选的重排器设置
 - MCP 启用状态与认证要求
 - 反向代理部署可选的 `MCP_PUBLIC_URL`
@@ -218,14 +221,31 @@ ID 仍会按 MCP 作用域和知识库归属校验。搜索结果会包含 `work
 
 ## 检索配置
 
-嵌入模型由 `EMBEDDING_PROVIDER`、`EMBEDDING_MODEL`、`SILICONFLOW_URL` 和 `SILICONFLOW_API_KEY` 控制。
+嵌入模型与向量索引由以下配置控制：
+
+- `EMBEDDING_PROVIDER=stub|local|siliconflow`
+- `EMBEDDING_MODEL=BAAI/bge-m3`
+- `EMBEDDING_URL=https://api.siliconflow.cn/v1/embeddings`
+- `SILICONFLOW_URL=https://api.siliconflow.cn`
+- SiliconFlow 嵌入或重排使用 `SILICONFLOW_API_KEY=sk-...`
+
+初始化向导默认选择 SiliconFlow 与 `BAAI/bge-m3`。默认嵌入请求地址是完整的
+`https://api.siliconflow.cn/v1/embeddings`；`SILICONFLOW_URL` 仍是用于推导重排地址的 API 根地址。`local`
+提供方会把 `EMBEDDING_URL` 作为 OpenAI 兼容 HTTP 嵌入端点调用。`stub` 是确定性离线提供方，用于测试或暂时不接入模型服务的部署。
+
+每个非文件夹文档都会把标题、标签和正文送入嵌入服务，并将向量写入 `document_embeddings`。只要文档内容哈希以及提供方、模型没有变化，
+后续搜索就会复用已有向量。服务启动时会补建缺失或过期向量；首次搜索也会按需建立索引，因此从 0.2.0 之前版本升级不需要单独导出数据。
 
 重排功能为可选项，由以下配置控制：
 
 - `RERANKER_ENABLED=true|false`
 - `RERANKER_PROVIDER=local|siliconflow|custom_http`
 - `RERANKER_MODEL=BAAI/bge-reranker-v2-m3`
-- `RERANKER_URL=http://...`，用于自定义 HTTP 重排服务
+- `RERANKER_URL=http://...`，用于本地或自定义 HTTP 重排服务
+
+SiliconFlow 重排地址为 `SILICONFLOW_URL/v1/rerank`；本地和自定义 HTTP 重排使用 `RERANKER_URL`。请求包含
+`{ model, query, documents, top_n, return_documents: false }`，响应可使用 `results` 或 `data`，每项包含 `index` 以及
+`score` 或 `relevance_score`。
 
 ## 前端
 
@@ -262,7 +282,7 @@ Vite 开发服务器会将 `/api`、`/mcp` 和 `/health` 代理到 `http://127.0
 - 创建团队、查看成员列表、发出邀请和接受邀请
 - 列出、新建、编辑、保存和删除文档
 - 编辑标签
-- 按标题、内容和标签进行关键词搜索
+- 基于标题、内容和标签的持久化嵌入搜索，并可选用模型重排
 - 在 Markdown 文本的编辑与预览模式之间切换
 
 ## 数据库 URL

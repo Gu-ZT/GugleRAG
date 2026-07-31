@@ -22,6 +22,7 @@ pub struct Config {
     pub(crate) mcp_auth_required: bool,
     pub(crate) embedding_provider: String,
     pub(crate) embedding_model: String,
+    pub(crate) embedding_url: String,
     pub(crate) siliconflow_url: String,
     pub(crate) siliconflow_api_key: String,
     pub(crate) reranker_enabled: bool,
@@ -77,6 +78,10 @@ impl Config {
         };
         let database_url = value("DATABASE_URL")
             .unwrap_or_else(|| "sqlite://data/guglerag.db?mode=rwc".to_string());
+        let siliconflow_url =
+            value("SILICONFLOW_URL").unwrap_or_else(|| "https://api.siliconflow.cn".to_string());
+        let embedding_url = value("EMBEDDING_URL")
+            .unwrap_or_else(|| siliconflow_endpoint_url(&siliconflow_url, "/v1/embeddings"));
         Self {
             host: value("SERVER_HOST").unwrap_or_else(|| "0.0.0.0".to_string()),
             port: value("SERVER_PORT")
@@ -92,8 +97,8 @@ impl Config {
             mcp_auth_required: parse_env_bool(value("MCP_AUTH_REQUIRED").as_deref(), false),
             embedding_provider: value("EMBEDDING_PROVIDER").unwrap_or_else(|| "stub".to_string()),
             embedding_model: value("EMBEDDING_MODEL").unwrap_or_else(|| "none".to_string()),
-            siliconflow_url: value("SILICONFLOW_URL")
-                .unwrap_or_else(|| "https://api.siliconflow.cn".to_string()),
+            embedding_url,
+            siliconflow_url,
             siliconflow_api_key: value("SILICONFLOW_API_KEY").unwrap_or_default(),
             reranker_enabled: parse_env_bool(value("RERANKER_ENABLED").as_deref(), false),
             reranker_provider: value("RERANKER_PROVIDER").unwrap_or_else(|| "none".to_string()),
@@ -117,6 +122,7 @@ impl Config {
             mcp_auth_required: true,
             embedding_provider: "stub".to_string(),
             embedding_model: "none".to_string(),
+            embedding_url: "https://api.siliconflow.cn/v1/embeddings".to_string(),
             siliconflow_url: "https://api.siliconflow.cn".to_string(),
             siliconflow_api_key: String::new(),
             reranker_enabled: false,
@@ -137,6 +143,7 @@ impl Config {
             && self.mcp_auth_required == other.mcp_auth_required
             && self.embedding_provider == other.embedding_provider
             && self.embedding_model == other.embedding_model
+            && self.embedding_url == other.embedding_url
             && self.siliconflow_url == other.siliconflow_url
             && self.siliconflow_api_key == other.siliconflow_api_key
             && self.reranker_enabled == other.reranker_enabled
@@ -193,6 +200,8 @@ pub struct SetupRequest {
     pub registration_enabled: bool,
     pub embedding_provider: String,
     pub embedding_model: String,
+    #[serde(default)]
+    pub embedding_url: String,
     pub siliconflow_url: Option<String>,
     pub siliconflow_api_key: Option<String>,
     pub reranker_enabled: bool,
@@ -228,6 +237,11 @@ pub fn validate_setup(input: &SetupRequest) -> Result<(), AppError> {
             ));
         }
     }
+    if input.embedding_provider != "stub" && input.embedding_model.trim().is_empty() {
+        return Err(AppError::BadRequest(
+            "EMBEDDING_MODEL is required when embeddings are enabled".to_string(),
+        ));
+    }
     if input.embedding_provider == "siliconflow"
         && input
             .siliconflow_api_key
@@ -238,6 +252,11 @@ pub fn validate_setup(input: &SetupRequest) -> Result<(), AppError> {
     {
         return Err(AppError::BadRequest(
             "SILICONFLOW_API_KEY is required for siliconflow embeddings".to_string(),
+        ));
+    }
+    if input.embedding_provider == "local" && input.embedding_url.trim().is_empty() {
+        return Err(AppError::BadRequest(
+            "EMBEDDING_URL is required for local embeddings".to_string(),
         ));
     }
     if input.reranker_enabled {
@@ -254,10 +273,27 @@ pub fn validate_setup(input: &SetupRequest) -> Result<(), AppError> {
                 "RERANKER_MODEL is required when reranker is enabled".to_string(),
             ));
         }
-        if input.reranker_provider == "custom_http" && input.reranker_url.trim().is_empty() {
+        if input.reranker_provider == "siliconflow"
+            && input
+                .siliconflow_api_key
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .is_empty()
+        {
             return Err(AppError::BadRequest(
-                "RERANKER_URL is required for custom_http reranker".to_string(),
+                "SILICONFLOW_API_KEY is required for siliconflow reranking".to_string(),
             ));
+        }
+        if matches!(input.reranker_provider.as_str(), "local" | "custom_http")
+            && input.reranker_url.trim().is_empty()
+        {
+            let message = if input.reranker_provider == "custom_http" {
+                "RERANKER_URL is required for custom_http reranker"
+            } else {
+                "RERANKER_URL is required for local reranker"
+            };
+            return Err(AppError::BadRequest(message.to_string()));
         }
     }
     Ok(())
@@ -319,6 +355,17 @@ pub fn render_env_file(input: &SetupRequest) -> String {
         .as_deref()
         .unwrap_or_default()
         .trim();
+    let embedding_url = input
+        .embedding_url
+        .trim()
+        .strip_suffix('/')
+        .map(|url| url.to_string())
+        .unwrap_or_else(|| input.embedding_url.trim().to_string());
+    let embedding_url = if embedding_url.is_empty() {
+        siliconflow_endpoint_url(siliconflow_url, "/v1/embeddings")
+    } else {
+        embedding_url
+    };
 
     [
         format!("SERVER_HOST={}", env_escape(&input.server_host)),
@@ -331,6 +378,7 @@ pub fn render_env_file(input: &SetupRequest) -> String {
             env_escape(&input.embedding_provider)
         ),
         format!("EMBEDDING_MODEL={}", env_escape(&input.embedding_model)),
+        format!("EMBEDDING_URL={}", env_escape(&embedding_url)),
         format!("SILICONFLOW_URL={}", env_escape(siliconflow_url)),
         format!("SILICONFLOW_API_KEY={}", env_escape(siliconflow_api_key)),
         format!("RERANKER_ENABLED={}", input.reranker_enabled),
@@ -346,6 +394,17 @@ pub fn render_env_file(input: &SetupRequest) -> String {
         String::new(),
     ]
     .join("\n")
+}
+
+fn siliconflow_endpoint_url(base: &str, suffix: &str) -> String {
+    let base = base.trim().trim_end_matches('/');
+    if base.ends_with(suffix) {
+        base.to_string()
+    } else if base.ends_with("/v1") && suffix.starts_with("/v1/") {
+        format!("{base}{}", &suffix[3..])
+    } else {
+        format!("{base}{suffix}")
+    }
 }
 
 fn default_registration_enabled() -> bool {

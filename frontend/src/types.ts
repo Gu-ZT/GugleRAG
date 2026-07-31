@@ -16,6 +16,7 @@ export interface SetupStatus {
     mcp_auth_required: boolean;
     embedding_provider: string;
     embedding_model: string;
+    embedding_url: string;
     reranker_enabled: boolean;
     reranker_provider: string;
     reranker_model: string;
@@ -31,6 +32,7 @@ export interface SetupPayload {
   registration_enabled: boolean;
   embedding_provider: "stub" | "local" | "siliconflow";
   embedding_model: string;
+  embedding_url: string;
   siliconflow_url: string;
   siliconflow_api_key: string;
   reranker_enabled: boolean;
@@ -56,6 +58,7 @@ export interface AdminConfigValues {
   registration_enabled: boolean;
   embedding_provider: "stub" | "local" | "siliconflow";
   embedding_model: string;
+  embedding_url: string;
   siliconflow_url: string;
   reranker_enabled: boolean;
   reranker_provider: "none" | "local" | "siliconflow" | "custom_http";

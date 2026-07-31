@@ -67,7 +67,9 @@ agents.
 │   ├── db.rs            # SQLx persistence
 │   ├── domain.rs        # Shared domain models
 │   ├── error.rs         # HTTP-aware application errors
-│   ├── search.rs        # Keyword retrieval and ranking
+│   ├── embedding.rs     # Embedding provider clients
+│   ├── reranker.rs      # Optional reranking provider clients
+│   ├── search.rs        # Persistent vector retrieval and ranking
 │   ├── lib.rs           # Application composition
 │   └── main.rs          # Thin executable entry point
 ├── tests/               # Backend integration tests
@@ -76,8 +78,10 @@ agents.
 └── AGENTS.md            # Agent/developer working notes
 ```
 
-The backend stores users, workspaces, teams, memberships, knowledge bases, documents, versions, and invitations through
-SQLx. Runtime configuration accepts SQLite, MySQL, and PostgreSQL `DATABASE_URL` values.
+The backend stores users, workspaces, teams, memberships, knowledge bases, documents, versions, invitations, and
+document embeddings through SQLx. Runtime configuration accepts SQLite, MySQL, and PostgreSQL `DATABASE_URL` values. The
+`document_embeddings` table is a vendor-neutral persistent vector index: vectors are stored as JSON with their provider,
+model, dimension, and content hash, then cosine similarity is calculated by Rust.
 
 ## First Run
 
@@ -98,7 +102,7 @@ wizard and writes `.env` through `/api/setup` with:
 - `SERVER_HOST` and `SERVER_PORT`
 - `DATABASE_URL` for SQLite, MySQL, or PostgreSQL
 - `JWT_SECRET`
-- embedding and SiliconFlow settings
+- embedding, complete SiliconFlow endpoint, and model settings
 - optional reranker settings
 - MCP enablement and auth requirement
 - optional `MCP_PUBLIC_URL` for reverse-proxy deployments
@@ -228,14 +232,34 @@ ownership. Search results include `workspace_id` and `knowledge_base_id` so a re
 
 ## Retrieval Configuration
 
-Embedding is controlled by `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `SILICONFLOW_URL`, and `SILICONFLOW_API_KEY`.
+Embedding and vector indexing are controlled by:
+
+- `EMBEDDING_PROVIDER=stub|local|siliconflow`
+- `EMBEDDING_MODEL=BAAI/bge-m3`
+- `EMBEDDING_URL=https://api.siliconflow.cn/v1/embeddings`
+- `SILICONFLOW_URL=https://api.siliconflow.cn`
+- `SILICONFLOW_API_KEY=sk-...` for SiliconFlow embeddings or reranking
+
+The setup wizard defaults to SiliconFlow with `BAAI/bge-m3`. The default embedding request URL is the complete
+`https://api.siliconflow.cn/v1/embeddings` endpoint; `SILICONFLOW_URL` remains the API base used to derive the reranker
+endpoint. `local` uses the configured `EMBEDDING_URL` as an OpenAI-compatible HTTP endpoint. `stub` is a deterministic
+offline provider intended for tests and installations that are not ready to call a model service.
+
+For every non-folder document, GugleRAG embeds the title, tags, and content, stores the vector in
+`document_embeddings`, and reuses it while the document content hash and provider/model settings remain unchanged. The
+server rebuilds missing or stale vectors at startup; a first search also performs lazy indexing, so documents from
+versions before 0.2.0 are migrated without a separate export step.
 
 Reranking is optional and controlled by:
 
 - `RERANKER_ENABLED=true|false`
 - `RERANKER_PROVIDER=local|siliconflow|custom_http`
 - `RERANKER_MODEL=BAAI/bge-reranker-v2-m3`
-- `RERANKER_URL=http://...` for custom HTTP reranker services
+- `RERANKER_URL=http://...` for local or custom HTTP reranker services
+
+The SiliconFlow reranker uses `SILICONFLOW_URL/v1/rerank`. Local and custom HTTP rerankers use `RERANKER_URL`. Each
+reranker receives `{ model, query, documents, top_n, return_documents: false }` and may return `results` or
+`data` entries containing `index` and `score` or `relevance_score`.
 
 ## Frontend
 
@@ -272,7 +296,7 @@ The current Vue workspace supports:
 - team creation, member lists, invitations, and invitation acceptance
 - document list, create, edit, save, delete
 - tag editing
-- keyword search over title, content, and tags
+- persistent embedding search over title, content, and tags, with optional model reranking
 - edit/preview switching for Markdown text
 
 ## Database URLs

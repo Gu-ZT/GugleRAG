@@ -147,6 +147,6 @@ pub struct SearchResult {
     pub id: Uuid,
     pub title: String,
     pub excerpt: String,
-    pub score: usize,
+    pub score: f32,
     pub updated_at: DateTime<Utc>,
 }

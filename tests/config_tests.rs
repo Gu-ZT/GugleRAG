@@ -12,6 +12,7 @@ fn valid_setup() -> SetupRequest {
         registration_enabled: true,
         embedding_provider: "stub".to_string(),
         embedding_model: "none".to_string(),
+        embedding_url: "https://api.siliconflow.cn/v1/embeddings".to_string(),
         siliconflow_url: None,
         siliconflow_api_key: None,
         reranker_enabled: true,
@@ -72,6 +73,43 @@ fn setup_validation_and_env_rendering_include_reranker_settings() {
     assert!(output.contains("RERANKER_PROVIDER=custom_http"));
     assert!(output.contains("RERANKER_MODEL=BAAI/bge-reranker-v2-m3"));
     assert!(output.contains("RERANKER_URL=http://127.0.0.1:9000/rerank"));
+}
+
+#[test]
+fn siliconflow_embedding_fallback_uses_the_complete_endpoint() {
+    let mut input = valid_setup();
+    input.embedding_provider = "siliconflow".to_string();
+    input.embedding_model = "BAAI/bge-m3".to_string();
+    input.embedding_url.clear();
+    input.siliconflow_url = Some("https://api.siliconflow.cn/".to_string());
+    input.siliconflow_api_key = Some("test-key".to_string());
+
+    let output = render_env_file(&input);
+    assert!(output.contains("EMBEDDING_URL=https://api.siliconflow.cn/v1/embeddings"));
+    assert!(!output.contains("//v1/embeddings"));
+}
+
+#[test]
+fn siliconflow_reranker_requires_an_api_key() {
+    let mut input = valid_setup();
+    input.reranker_provider = "siliconflow".to_string();
+    input.reranker_url.clear();
+
+    let error = validate_setup(&input).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "SILICONFLOW_API_KEY is required for siliconflow reranking"
+    );
+}
+
+#[test]
+fn siliconflow_reranker_uses_the_base_url_without_a_custom_url() {
+    let mut input = valid_setup();
+    input.reranker_provider = "siliconflow".to_string();
+    input.reranker_url.clear();
+    input.siliconflow_api_key = Some("test-key".to_string());
+
+    validate_setup(&input).unwrap();
 }
 
 #[test]

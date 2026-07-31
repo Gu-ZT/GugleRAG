@@ -21,6 +21,7 @@ pub(crate) async fn health(State(state): State<AppState>) -> Json<Value> {
         "embedding": {
             "provider": state.config.embedding_provider,
             "model": state.config.embedding_model,
+            "url": state.config.embedding_url,
             "siliconflow_url": state.config.siliconflow_url
         },
         "reranker": {
@@ -49,6 +50,7 @@ pub(crate) async fn setup_status(State(state): State<AppState>) -> Json<Value> {
             "registration_enabled": state.config.registration_enabled,
             "embedding_provider": state.config.embedding_provider,
             "embedding_model": state.config.embedding_model,
+            "embedding_url": state.config.embedding_url,
             "reranker_enabled": state.config.reranker_enabled,
             "reranker_provider": state.config.reranker_provider,
             "reranker_model": state.config.reranker_model,

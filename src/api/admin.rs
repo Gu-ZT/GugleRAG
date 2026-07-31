@@ -26,6 +26,8 @@ pub(crate) struct AdminConfigRequest {
     registration_enabled: Option<bool>,
     embedding_provider: String,
     embedding_model: String,
+    #[serde(default)]
+    embedding_url: String,
     siliconflow_url: String,
     #[serde(default)]
     siliconflow_api_key: Option<String>,
@@ -84,6 +86,11 @@ pub(crate) async fn save_config(
     let jwt_secret = replacement_secret(input.jwt_secret, &current.jwt_secret);
     let siliconflow_api_key =
         replacement_secret(input.siliconflow_api_key, &current.siliconflow_api_key);
+    let embedding_url = if input.embedding_url.trim().is_empty() {
+        current.embedding_url.clone()
+    } else {
+        input.embedding_url
+    };
     let setup = SetupRequest {
         server_host: input.server_host,
         server_port: input.server_port,
@@ -94,6 +101,7 @@ pub(crate) async fn save_config(
             .unwrap_or(current.registration_enabled),
         embedding_provider: input.embedding_provider,
         embedding_model: input.embedding_model,
+        embedding_url,
         siliconflow_url: Some(input.siliconflow_url),
         siliconflow_api_key: Some(siliconflow_api_key),
         reranker_enabled: input.reranker_enabled,
@@ -270,6 +278,7 @@ fn config_response(state: &AppState, saved: &Config) -> Value {
             "registration_enabled": saved.registration_enabled,
             "embedding_provider": saved.embedding_provider,
             "embedding_model": saved.embedding_model,
+            "embedding_url": saved.embedding_url,
             "siliconflow_url": saved.siliconflow_url,
             "reranker_enabled": saved.reranker_enabled,
             "reranker_provider": saved.reranker_provider,

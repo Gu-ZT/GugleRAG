@@ -30,9 +30,9 @@ fn title_and_tags_rank_above_content_matches() {
     let results = search_documents(&documents, "rust", 10);
     assert_eq!(results.len(), 3);
     assert_eq!(results[0].title, "Rust handbook");
-    assert_eq!(results[0].score, 8);
-    assert_eq!(results[1].score, 5);
-    assert_eq!(results[2].score, 1);
+    assert_eq!(results[0].score, 8.0);
+    assert_eq!(results[1].score, 5.0);
+    assert_eq!(results[2].score, 1.0);
 }
 
 #[test]

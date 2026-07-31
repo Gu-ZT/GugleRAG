@@ -1,5 +1,5 @@
 use super::collaboration;
-use crate::{AppState, auth, domain::SearchResult, error::AppError, search as search_engine};
+use crate::{AppState, auth, domain::SearchResult, error::AppError};
 use axum::{
     Json,
     extract::{Query, State},
@@ -29,9 +29,10 @@ pub(crate) async fn search_documents(
         .database
         .all_documents_for_knowledge_base(knowledge_base.id)
         .await?;
-    Ok(Json(search_engine::search_documents(
-        &documents,
-        &query.q,
-        query.limit.unwrap_or(10),
-    )))
+    Ok(Json(
+        state
+            .search
+            .search_documents(&documents, &query.q, query.limit.unwrap_or(10))
+            .await?,
+    ))
 }

@@ -10,7 +10,8 @@
 - 用户、文档和版本历史已通过 SQLx 持久化到配置的数据库。
 - Vue 工作台已支持注册/登录、文档列表、新建、编辑、保存、删除、标签和搜索。
 - Rust 后端已拆分为配置、领域模型、数据库、认证、REST API、MCP、搜索和错误处理模块，`main.rs` 仅保留启动入口。
-- 后端配置、账号校验和关键词排序已由顶层 `tests/` 集成测试覆盖。
+- 后端配置、账号校验、向量迁移和检索 provider 调用已由顶层 `tests/` 集成测试覆盖。
+- 已加入数据库中立的 `document_embeddings` 持久化向量索引，支持启动补建、首次搜索懒建和内容哈希失效重建。
 - 已加入个人/团队工作区、多知识库、团队成员邀请与加入，以及按用户/团队/全部可访问知识库隔离的 MCP 配置。
 - 已加入 Linux x64/ARM64、Windows x64/ARM64、macOS ARM64/x64 的原生 CI 验证、二进制架构检查、服务冒烟测试和便携发布包流程。
 - 已加入主分支成功构建后的唯一 prerelease，以及与清单版本严格对应的标签正式发布流程。
@@ -22,7 +23,9 @@
 - 多用户团队协作
 - Markdown 文档管理与全文搜索
 - 内置 MCP (Model Context Protocol) 服务，供 AI Agent 调用
-- 嵌入向量化支持（本地推理 / SiliconFlow API 切换）
+
++ 嵌入向量化支持（本地兼容 HTTP 服务 / SiliconFlow API 切换）
+
 - 全栈自包含：Rust 后端托管 Vue3 前端构建产物，后续可切换为二进制资源嵌入
 - 可选重排模型集成，提升 RAG 检索质量
 
@@ -32,18 +35,18 @@
 
 ## 2. 技术栈
 
-| 层级             | 技术选型                                                   |
-|------------------|------------------------------------------------------------|
-| **后端语言**     | Rust（稳定版）                                             |
-| **Web 框架**     | Axum（或 Actix-web）                                       |
-| **数据库**       | SQLite（开发/测试），MySQL / PostgreSQL（通过 `sqlx`）     |
-| **全文搜索**     | Tantivy（Rust 原生全文检索引擎）                           |
-| **嵌入模型**     | `fastembed-rs`（本地 ONNX 推理） + SiliconFlow API（远程） |
-| **前端框架**     | Vue 3 + TypeScript                                         |
-| **前端构建工具** | Vite                                                       |
-| **前端静态托管** | `rust-embed` 嵌入到二进制文件                              |
-| **MCP 协议**     | 基于 JSON-RPC 自行实现（支持 stdio / HTTP 传输）           |
-| **协作（可选）** | WebSocket（通知/在线状态）                                 |
+| 层级             | 技术选型                                               |
+|------------------|--------------------------------------------------------|
+| **后端语言**     | Rust（稳定版）                                         |
+| **Web 框架**     | Axum（或 Actix-web）                                   |
+| **数据库**       | SQLite（开发/测试），MySQL / PostgreSQL（通过 `sqlx`） |
+| **全文搜索**     | 关键词过滤（全文引擎仍在规划）                         |
+| **嵌入模型**     | 本地 OpenAI 兼容 HTTP 服务 + SiliconFlow API（远程）   |
+| **前端框架**     | Vue 3 + TypeScript                                     |
+| **前端构建工具** | Vite                                                   |
+| **前端静态托管** | `rust-embed` 嵌入到二进制文件                          |
+| **MCP 协议**     | 基于 JSON-RPC 自行实现（支持 stdio / HTTP 传输）       |
+| **协作（可选）** | WebSocket（通知/在线状态）                             |
 
 ---
 
@@ -68,16 +71,16 @@
 ### 3.3 搜索与检索
 
 - [ ] 基于 Tantivy 的全文搜索（标题、正文）
-- [ ] 向量语义搜索（基于嵌入模型）
-- [ ] 混合检索（全文 + 向量）与重排（可选）
+- [x] 向量语义搜索（持久化 embedding + Rust 余弦相似度）
+- [ ] 混合检索（全文 + 向量）
 - [ ] 搜索结果高亮与摘要
 
 ### 3.4 嵌入服务（可切换）
 
-- [ ] **本地模式**：通过 `fastembed-rs` 加载 `BAAI/bge-large-zh-v1.5` 或 `BAAI/bge-large-en-v1.5` 或 `BAAI/bge-m3`
-- [ ] **远程模式**：调用 [SiliconFlow (https://api-docs.siliconflow.cn/docs/api/embeddings-post)]
+- [x] **本地模式**：调用配置的 OpenAI 兼容 HTTP embedding endpoint
+- [x] **远程模式**：调用 [SiliconFlow (https://api-docs.siliconflow.cn/docs/api/embeddings-post)]
   的 [Embeddings API](https://api.siliconflow.cn/v1/embeddings)
-- [ ] 环境变量切换（`EMBEDDING_PROVIDER=local|siliconflow`，`SILICONFLOW_API_KEY=sk-xxxxxx`）
+- [x] 环境变量切换（`EMBEDDING_PROVIDER=stub|local|siliconflow`、`EMBEDDING_URL` 和 `SILICONFLOW_API_KEY`）
 - [ ] 统一的 `Embedder` trait，支持策略模式
 
 ### 3.5 MCP 服务（核心）
@@ -100,7 +103,7 @@
 - [x] 布局：工作区切换 + 可折叠知识库/文章目录树 + 主编辑/预览区
 - [ ] Markdown 编辑器（支持实时预览、代码高亮）
 - [x] Markdown 扩展预览（`:::note`、`:::warning`、GitHub 风格任务列表）
-- [x] 搜索框（当前为关键词搜索，语义切换待接入嵌入索引）
+- [x] 搜索框（已接入持久化嵌入检索与可选模型重排）
 - [ ] 知识图谱可视化（使用 `vis-network` 或 `ECharts`）
 - [ ] AI 交互侧边栏（展示 Agent 操作日志，或直接与 Agent 对话）
 - [ ] 用户管理界面（邀请成员、角色分配）
@@ -130,12 +133,12 @@
 
 ### Phase 2：搜索与嵌入（2-3 周）
 
-- [ ] 集成 Tantivy 全文搜索
-- [ ] 实现嵌入服务（本地 `fastembed-rs` 和 SiliconFlow API 切换）
-- [ ] 向量索引与语义搜索 API
-- [ ] 前端搜索界面（支持两种模式切换）
+- [ ] 集成全文搜索引擎
+- [x] 实现嵌入服务（本地兼容 HTTP 和 SiliconFlow API 切换）
+- [x] 持久化向量索引与语义搜索 API
+- [x] 前端搜索界面接入后端向量检索
 
-**交付**：具备混合搜索能力的知识库。
+**交付**：具备持久化向量语义搜索能力的知识库，全文+向量混合检索仍在后续规划。
 
 ### Phase 3：MCP 集成（1-2 周）
 
@@ -157,7 +160,7 @@
 
 ### Phase 5：高级功能（可选，2-3 周）
 
-- [ ] 重排模型集成（通过单独服务或本地 `reranker`）
+- [x] 重排模型集成（SiliconFlow、本地或自定义 HTTP 服务）
 - [ ] 知识图谱可视化
 - [ ] AI 对话侧边栏（直接使用 MCP 工具与 Agent 交互）
 - [ ] 文档导出（PDF/HTML）
@@ -171,62 +174,42 @@
 
 通过环境变量或 `.env` 文件配置：
 
-| 变量名                | 说明                                    | 默认值                       |
-|-----------------------|-----------------------------------------|------------------------------|
-| `SERVER_HOST`         | 监听地址                                | `0.0.0.0`                    |
-| `SERVER_PORT`         | 监听端口                                | `8080`                       |
-| `DATABASE_URL`        | 数据库连接串（SQLite/MySQL/PostgreSQL） | `sqlite://data/guglerag.db?mode=rwc` |
-| `EMBEDDING_PROVIDER`  | `local` 或 `siliconflow`                | `local`                      |
-| `EMBEDDING_MODEL`     | 模型名称（如 `BAAI/bge-large-zh-v1.5`） | `BAAI/bge-large-zh-v1.5`     |
-| `SILICONFLOW_URL`     | SiliconFlow API 地址（远程模式必填）    | `https://api.siliconflow.cn` |
-| `SILICONFLOW_API_KEY` | SiliconFlow API Key（远程模式必填）     | 空                           |
-| `RERANKER_ENABLED`    | 是否启用重排模型                        | `false`                      |
-| `RERANKER_PROVIDER`   | `local` / `siliconflow` / `custom_http` | `siliconflow`                |
-| `RERANKER_MODEL`      | 重排模型名称                            | `BAAI/bge-reranker-v2-m3`    |
-| `RERANKER_URL`        | 自定义重排 HTTP 服务地址                | 空                           |
-| `JWT_SECRET`          | JWT 签名密钥                            | （必须设置）                 |
-| `MCP_ENABLED`         | 是否启用 MCP 端点                       | `true`                       |
+| 变量名                | 说明                                    | 默认值                                     |
+|-----------------------|-----------------------------------------|--------------------------------------------|
+| `SERVER_HOST`         | 监听地址                                | `0.0.0.0`                                  |
+| `SERVER_PORT`         | 监听端口                                | `8080`                                     |
+| `DATABASE_URL`        | 数据库连接串（SQLite/MySQL/PostgreSQL） | `sqlite://data/guglerag.db?mode=rwc`       |
+| `EMBEDDING_PROVIDER`  | `stub`、`local` 或 `siliconflow`        | `stub`（向导默认 SiliconFlow）             |
+| `EMBEDDING_MODEL`     | 模型名称                                | `none`（向导默认 `BAAI/bge-m3`）           |
+| `EMBEDDING_URL`       | 完整嵌入调用地址                        | `https://api.siliconflow.cn/v1/embeddings` |
+| `SILICONFLOW_URL`     | SiliconFlow API 地址（远程模式必填）    | `https://api.siliconflow.cn`               |
+| `SILICONFLOW_API_KEY` | SiliconFlow API Key（远程模式必填）     | 空                                         |
+| `RERANKER_ENABLED`    | 是否启用重排模型                        | `false`                                    |
+| `RERANKER_PROVIDER`   | `local` / `siliconflow` / `custom_http` | `none`（启用时选择）                       |
+| `RERANKER_MODEL`      | 重排模型名称                            | `BAAI/bge-reranker-v2-m3`                  |
+| `RERANKER_URL`        | 自定义重排 HTTP 服务地址                | 空                                         |
+| `JWT_SECRET`          | JWT 签名密钥                            | （必须设置）                               |
+| `MCP_ENABLED`         | 是否启用 MCP 端点                       | `true`                                     |
 
 ---
 
 ## 6. 项目目录结构
 
 ```
-my-knowledge-base/
-├── backend/ # Rust 项目
-│ ├── src/
-│ │ ├── api/ # REST API 路由
-│ │ │ ├── auth.rs
-│ │ │ ├── docs.rs
-│ │ │ ├── search.rs
-│ │ │ └── workspace.rs
-│ │ ├── mcp/ # MCP 协议实现
-│ │ │ ├── server.rs
-│ │ │ └── tools.rs
-│ │ ├── embedder/ # 嵌入服务（策略模式）
-│ │ │ ├── mod.rs
-│ │ │ ├── local.rs
-│ │ │ └── siliconflow.rs
-│ │ ├── db/ # 数据库操作（sqlx）
-│ │ ├── search/ # Tantivy 索引
-│ │ ├── static/ # 前端构建产物（gitignore）
-│ │ ├── main.rs
-│ │ └── lib.rs
-│ ├── Cargo.toml
-│ └── .env.example
+.
+├── src/ # Rust 后端
+│ ├── api/ # REST API 路由
+│ ├── mcp/ # MCP 协议实现
+│ ├── embedding.rs # 嵌入服务 provider
+│ ├── reranker.rs # 重排服务 provider
+│ ├── db.rs # 数据库操作（sqlx）
+│ ├── search.rs # 向量检索与排序
+│ ├── main.rs
+│ └── lib.rs
+├── tests/ # 后端集成测试
 ├── frontend/ # Vue3 + TS 项目
-│ ├── src/
-│ │ ├── api/ # 调用后端 API
-│ │ ├── components/ # Vue 组件
-│ │ ├── views/ # 页面视图
-│ │ ├── stores/ # Pinia 状态管理
-│ │ ├── types/ # TypeScript 类型定义
-│ │ ├── App.vue
-│ │ └── main.ts
-│ ├── index.html
-│ ├── vite.config.ts
-│ ├── package.json
-│ └── tsconfig.json
+├── Cargo.toml
+├── .env.example
 ├── README.md
 └── PLAN.md # 本文件
 ```
@@ -235,22 +218,22 @@ my-knowledge-base/
 
 ## 7. 里程碑与验收标准
 
-| 里程碑               | 预计时间   | 验收标准                                       |
-|----------------------|------------|------------------------------------------------|
-| M1: MVP 可用         | 第 3 周末  | 多用户登录、文档增删改查、目录树，前端可访问   |
-| M2: 搜索上线         | 第 6 周末  | 全文+语义搜索，支持本地/云端嵌入切换           |
-| M3: MCP 服务联调     | 第 8 周末  | 至少 5 个 MCP 工具通过 Claude Desktop 验证可用 |
-| M4: 协作功能         | 第 11 周末 | 工作区成员管理、权限控制、版本历史             |
-| M5（可选）: 增强特性 | 第 14 周末 | 重排、图谱、AI 对话面板                        |
+| 里程碑               | 预计时间   | 验收标准                                              |
+|----------------------|------------|-------------------------------------------------------|
+| M1: MVP 可用         | 第 3 周末  | 多用户登录、文档增删改查、目录树，前端可访问          |
+| M2: 搜索上线         | 第 6 周末  | 向量语义搜索，支持本地/云端嵌入切换，全文引擎后续补充 |
+| M3: MCP 服务联调     | 第 8 周末  | 至少 5 个 MCP 工具通过 Claude Desktop 验证可用        |
+| M4: 协作功能         | 第 11 周末 | 工作区成员管理、权限控制、版本历史                    |
+| M5（可选）: 增强特性 | 第 14 周末 | 图谱、AI 对话面板和全文+向量混合检索                  |
 
 ---
 
 ## 8. 风险与应对
 
-- **嵌入模型资源消耗**：本地推理需至少 16GB 内存或 GPU。建议默认使用 SiliconFlow API 降低启动门槛。
+- **嵌入服务资源消耗**：本地兼容 HTTP 服务的资源由服务自身管理；建议默认使用 SiliconFlow API 降低启动门槛。
 - **MCP 协议演进**：关注官方规范更新，保持协议实现的灵活性。
 - **前端实时协作**：若协同编辑实现复杂，可推迟到 Phase 5，初版仅支持手动刷新。
-- **数据迁移**：SQLite 单文件便于备份，未来迁移到 PostgreSQL 需提供迁移脚本。
+- **数据迁移**：升级时自动创建 `document_embeddings` 表，并按需为旧文档补建向量；SQLite 单文件仍便于备份。
 
 ---
 
@@ -258,13 +241,9 @@ my-knowledge-base/
 
 建议按 Phase 1 开始，逐步迭代。每日构建可运行版本，保持主干稳定。
 
-**立即启动命令**：
+**当前启动命令**：
 
 ```bash
-# 后端
-cargo new backend --lib
-cd backend && cargo add axum tokio sqlx tantivy fastembed-rs serde
-
-# 前端
-npm create vite@latest frontend -- --template vue-ts
+cargo run
+cd frontend && pnpm run dev
 ```
