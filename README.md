@@ -81,8 +81,10 @@ agents.
 
 The backend stores users, workspaces, teams, memberships, knowledge bases, documents, versions, invitations, and
 document embeddings through SQLx. Runtime configuration accepts SQLite, MySQL, and PostgreSQL `DATABASE_URL` values. The
-`document_embeddings` table is a vendor-neutral persistent vector index: vectors are stored as JSON with their provider,
-model, dimension, and content hash, then cosine similarity is calculated by Rust.
+`document_embedding_chunks` is a vendor-neutral persistent vector index: each document is split into overlapping text
+chunks, and each chunk stores its vector as JSON together with the provider, model, dimension, and content hash. Rust
+calculates cosine similarity and aggregates the best matching chunk back to its document. The legacy
+`document_embeddings` table is retained during upgrades and is no longer used for active retrieval.
 
 ## First Run
 
@@ -259,10 +261,14 @@ The setup wizard defaults to SiliconFlow with `BAAI/bge-m3`. The default embeddi
 endpoint. `local` uses the configured `EMBEDDING_URL` as an OpenAI-compatible HTTP endpoint. `stub` is a deterministic
 offline provider intended for tests and installations that are not ready to call a model service.
 
-For every non-folder document, GugleRAG embeds the title, tags, and content, stores the vector in
-`document_embeddings`, and reuses it while the document content hash and provider/model settings remain unchanged. The
-server rebuilds missing or stale vectors at startup; a first search also performs lazy indexing, so documents from
-versions before 0.2.0 are migrated without a separate export step.
+For every non-folder document, GugleRAG keeps the title and tags as context on overlapping content chunks. The chunk
+window is selected from the configured model's documented input limit with a conservative character budget: 384
+characters for the 512-token BGE-large/BCE models, 6,144 characters for the 8,192-token BGE-M3 models, and 8,192
+characters for the 32,768-token Qwen3-Embedding models. Other models use a 4,000-character fallback. One vector per
+chunk is stored in `document_embedding_chunks`, and chunks are reused while their content hashes and provider/model
+settings remain unchanged. Search ranks a document by its best matching chunk and sends that chunk to the optional
+reranker. The server rebuilds missing or stale chunks at startup; a first search also performs lazy indexing, so
+documents and one-vector indexes from earlier versions are migrated without a separate export step.
 
 Reranking is optional and controlled by:
 

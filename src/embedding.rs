@@ -116,6 +116,11 @@ impl EmbeddingService {
         if inputs.is_empty() {
             return Ok(Vec::new());
         }
+        if inputs.iter().any(|input| input.trim().is_empty()) {
+            return Err(AppError::Internal(
+                "embedding input must not contain empty strings".to_string(),
+            ));
+        }
         let vectors = match &self.provider {
             EmbeddingProvider::Stub => {
                 Ok(inputs.iter().map(|input| stub_embedding(input)).collect())

@@ -1,6 +1,6 @@
 use crate::{
     config::Config,
-    db::Database,
+    db::{Database, DocumentEmbeddingChunk, NewDocumentEmbeddingChunk},
     domain::{Document, SearchResult},
     embedding::{EmbeddingService, cosine_similarity},
     error::AppError,
@@ -9,6 +9,7 @@ use crate::{
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
+    slice,
     sync::Arc,
 };
 use tokio::sync::Mutex;
@@ -16,7 +17,12 @@ use uuid::Uuid;
 
 const MAX_SEARCH_RESULTS: usize = 50;
 const EMBEDDING_BATCH_SIZE: usize = 32;
-const MAX_EMBEDDING_TEXT_CHARS: usize = 16_000;
+const DEFAULT_EMBEDDING_CHUNK_SIZE_CHARS: usize = 4_000;
+const BGE_LARGE_EMBEDDING_CHUNK_SIZE_CHARS: usize = 384;
+const BGE_M3_EMBEDDING_CHUNK_SIZE_CHARS: usize = 6_144;
+const QWEN_EMBEDDING_CHUNK_SIZE_CHARS: usize = 8_192;
+const EMBEDDING_CHUNK_OVERLAP_CHARS: usize = 400;
+const EMBEDDING_HEADER_MAX_CHARS: usize = 800;
 const RERANK_CANDIDATE_MULTIPLIER: usize = 5;
 
 #[derive(Clone)]
@@ -32,6 +38,32 @@ struct RankedDocument<'a> {
     document: &'a Document,
     text: String,
     score: f32,
+}
+
+#[derive(Clone)]
+struct EmbeddingChunkInput {
+    chunk_index: usize,
+    text: String,
+    content_hash: String,
+}
+
+#[derive(Clone)]
+struct IndexedChunk {
+    chunk_index: usize,
+    text: String,
+    vector: Vec<f32>,
+}
+
+struct PendingDocument {
+    document_id: Uuid,
+    knowledge_base_id: Uuid,
+    chunks: Vec<EmbeddingChunkInput>,
+}
+
+struct PendingChunk {
+    document_id: Uuid,
+    chunk_index: usize,
+    text: String,
 }
 
 impl SearchEngine {
@@ -70,9 +102,17 @@ impl SearchEngine {
         }
 
         let (vectors, _) = self.ensure_embeddings(documents).await?;
+        let query_text = query
+            .trim()
+            .chars()
+            .take(embedding_chunk_size_chars(self.embedder.model()))
+            .collect::<String>();
+        if query_text.is_empty() {
+            return Ok(Vec::new());
+        }
         let query_vector = self
             .embedder
-            .embed(&[query.to_string()])
+            .embed(slice::from_ref(&query_text))
             .await?
             .into_iter()
             .next()
@@ -83,8 +123,13 @@ impl SearchEngine {
         let mut ranked = searchable_documents
             .into_iter()
             .filter_map(|document| {
-                let vector = vectors.get(&document.id)?;
-                let semantic_score = cosine_similarity(vector, &query_vector);
+                let chunks = vectors.get(&document.id)?;
+                let best_chunk = chunks.iter().max_by(|left, right| {
+                    cosine_similarity(&left.vector, &query_vector)
+                        .total_cmp(&cosine_similarity(&right.vector, &query_vector))
+                        .then_with(|| right.chunk_index.cmp(&left.chunk_index))
+                })?;
+                let semantic_score = cosine_similarity(&best_chunk.vector, &query_vector);
                 let score = if use_lexical_score {
                     lexical_score(document, &terms) as f32
                 } else {
@@ -95,7 +140,7 @@ impl SearchEngine {
                 }
                 Some(RankedDocument {
                     document,
-                    text: document_embedding_text(document),
+                    text: best_chunk.text.clone(),
                     score,
                 })
             })
@@ -120,7 +165,9 @@ impl SearchEngine {
                 .iter()
                 .map(|candidate| candidate.text.clone())
                 .collect::<Vec<_>>();
-            let mut reranked_scores = reranker.rerank(query, &candidate_texts, limit).await?;
+            let mut reranked_scores = reranker
+                .rerank(&query_text, &candidate_texts, limit)
+                .await?;
             reranked_scores.sort_by(|left, right| right.score.total_cmp(&left.score));
             let mut selected = HashSet::new();
             let mut reranked = Vec::with_capacity(candidates.len());
@@ -156,37 +203,60 @@ impl SearchEngine {
     async fn ensure_embeddings(
         &self,
         documents: &[Document],
-    ) -> Result<(HashMap<Uuid, Vec<f32>>, usize), AppError> {
+    ) -> Result<(HashMap<Uuid, Vec<IndexedChunk>>, usize), AppError> {
         let _lock = self.embedding_lock.lock().await;
-        let stored = self
-            .database
-            .list_document_embeddings()
-            .await?
-            .into_iter()
-            .map(|embedding| (embedding.document_id, embedding))
-            .collect::<HashMap<_, _>>();
+        let mut stored_by_document = HashMap::<Uuid, Vec<DocumentEmbeddingChunk>>::new();
+        for embedding in self.database.list_document_embedding_chunks().await? {
+            stored_by_document
+                .entry(embedding.document_id)
+                .or_default()
+                .push(embedding);
+        }
         let mut vectors = HashMap::new();
-        let mut missing = Vec::new();
+        let mut pending_documents = Vec::new();
+        let mut pending_chunks = Vec::new();
         for document in documents.iter().filter(|document| !document.is_folder) {
-            let text = document_embedding_text(document);
-            let content_hash = content_hash(&text);
-            if let Some(embedding) = stored.get(&document.id)
-                && embedding.knowledge_base_id == document.knowledge_base_id
-                && embedding.content_hash == content_hash
-                && embedding.provider == self.embedder.provider_name()
-                && embedding.model == self.embedder.model()
-            {
-                vectors.insert(document.id, embedding.vector.clone());
+            let chunks = document_embedding_chunks(document, self.embedder.model());
+            let mut stored_chunks = stored_by_document.remove(&document.id).unwrap_or_default();
+            stored_chunks.sort_by_key(|chunk| chunk.chunk_index);
+            let reusable = stored_chunks.len() == chunks.len()
+                && chunks.iter().zip(&stored_chunks).all(|(chunk, stored)| {
+                    stored.chunk_index == chunk.chunk_index
+                        && stored.knowledge_base_id == document.knowledge_base_id
+                        && stored.content_hash == chunk.content_hash
+                        && stored.provider == self.embedder.provider_name()
+                        && stored.model == self.embedder.model()
+                });
+            if reusable {
+                let indexed_chunks = chunks
+                    .iter()
+                    .zip(stored_chunks)
+                    .map(|(chunk, stored)| IndexedChunk {
+                        chunk_index: chunk.chunk_index,
+                        text: chunk.text.clone(),
+                        vector: stored.vector,
+                    })
+                    .collect();
+                vectors.insert(document.id, indexed_chunks);
             } else {
-                missing.push((document, text, content_hash));
+                pending_chunks.extend(chunks.iter().map(|chunk| PendingChunk {
+                    document_id: document.id,
+                    chunk_index: chunk.chunk_index,
+                    text: chunk.text.clone(),
+                }));
+                pending_documents.push(PendingDocument {
+                    document_id: document.id,
+                    knowledge_base_id: document.knowledge_base_id,
+                    chunks,
+                });
             }
         }
 
-        let mut indexed = 0;
-        for batch in missing.chunks(EMBEDDING_BATCH_SIZE) {
+        let mut generated_vectors = HashMap::<(Uuid, usize), Vec<f32>>::new();
+        for batch in pending_chunks.chunks(EMBEDDING_BATCH_SIZE) {
             let inputs = batch
                 .iter()
-                .map(|(_, text, _)| text.clone())
+                .map(|chunk| chunk.text.clone())
                 .collect::<Vec<_>>();
             let embeddings = self.embedder.embed(&inputs).await?;
             if embeddings.len() != batch.len() {
@@ -194,20 +264,52 @@ impl SearchEngine {
                     "embedding provider returned an unexpected batch size".to_string(),
                 ));
             }
-            for ((document, _, content_hash), vector) in batch.iter().zip(embeddings) {
-                self.database
-                    .replace_document_embedding(
-                        document.id,
-                        document.knowledge_base_id,
-                        content_hash,
-                        self.embedder.provider_name(),
-                        self.embedder.model(),
-                        &vector,
-                    )
-                    .await?;
-                vectors.insert(document.id, vector);
-                indexed += 1;
+            for (chunk, vector) in batch.iter().zip(embeddings) {
+                generated_vectors.insert((chunk.document_id, chunk.chunk_index), vector);
             }
+        }
+
+        let mut indexed = 0;
+        for pending in pending_documents {
+            let document_id = pending.document_id;
+            let records = pending
+                .chunks
+                .iter()
+                .map(|chunk| {
+                    Ok(NewDocumentEmbeddingChunk {
+                        chunk_index: chunk.chunk_index,
+                        content_hash: chunk.content_hash.clone(),
+                        vector: generated_vectors
+                            .remove(&(document_id, chunk.chunk_index))
+                            .ok_or_else(|| {
+                                AppError::Internal(
+                                    "missing generated embedding for document chunk".to_string(),
+                                )
+                            })?,
+                    })
+                })
+                .collect::<Result<Vec<_>, AppError>>()?;
+            self.database
+                .replace_document_embedding_chunks(
+                    document_id,
+                    pending.knowledge_base_id,
+                    self.embedder.provider_name(),
+                    self.embedder.model(),
+                    &records,
+                )
+                .await?;
+            let indexed_chunks = pending
+                .chunks
+                .into_iter()
+                .zip(records)
+                .map(|(chunk, record)| IndexedChunk {
+                    chunk_index: chunk.chunk_index,
+                    text: chunk.text,
+                    vector: record.vector,
+                })
+                .collect();
+            vectors.insert(document_id, indexed_chunks);
+            indexed += 1;
         }
         Ok((vectors, indexed))
     }
@@ -263,14 +365,58 @@ fn query_terms(query: &str) -> Vec<String> {
         .collect()
 }
 
-fn document_embedding_text(document: &Document) -> String {
-    let text = format!(
-        "Title: {}\nTags: {}\n\n{}",
+fn document_embedding_chunks(document: &Document, model: &str) -> Vec<EmbeddingChunkInput> {
+    let chunk_size = embedding_chunk_size_chars(model);
+    let header = format!(
+        "Title: {}\nTags: {}\n\n",
         document.title,
         document.tags.join(", "),
-        document.content
-    );
-    text.chars().take(MAX_EMBEDDING_TEXT_CHARS).collect()
+    )
+    .chars()
+    .take(EMBEDDING_HEADER_MAX_CHARS.min(chunk_size / 4))
+    .collect::<String>();
+    let content_chars = document.content.chars().collect::<Vec<_>>();
+    let content_chunk_size = chunk_size.saturating_sub(header.chars().count()).max(1);
+    let overlap = EMBEDDING_CHUNK_OVERLAP_CHARS.min(content_chunk_size / 4);
+    if content_chars.is_empty() {
+        return vec![EmbeddingChunkInput {
+            chunk_index: 0,
+            content_hash: content_hash(&header),
+            text: header,
+        }];
+    }
+
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    while start < content_chars.len() {
+        let end = (start + content_chunk_size).min(content_chars.len());
+        let content = content_chars[start..end].iter().collect::<String>();
+        let text = format!("{header}{content}");
+        chunks.push(EmbeddingChunkInput {
+            chunk_index: chunks.len(),
+            content_hash: content_hash(&text),
+            text,
+        });
+        if end == content_chars.len() {
+            break;
+        }
+        start = end.saturating_sub(overlap);
+    }
+    chunks
+}
+
+fn embedding_chunk_size_chars(model: &str) -> usize {
+    // Character limits leave room below the documented token limits because this service does not bundle a tokenizer.
+    match model.trim().to_ascii_lowercase().as_str() {
+        "baai/bge-large-zh-v1.5"
+        | "baai/bge-large-en-v1.5"
+        | "netease-youdao/bce-embedding-base_v1" => BGE_LARGE_EMBEDDING_CHUNK_SIZE_CHARS,
+        "baai/bge-m3" | "pro/baai/bge-m3" => BGE_M3_EMBEDDING_CHUNK_SIZE_CHARS,
+        "qwen/qwen3-embedding-8b" | "qwen/qwen3-embedding-4b" | "qwen/qwen3-embedding-0.6b" => {
+            QWEN_EMBEDDING_CHUNK_SIZE_CHARS
+        }
+        _ => DEFAULT_EMBEDDING_CHUNK_SIZE_CHARS,
+    }
 }
 
 fn content_hash(text: &str) -> String {

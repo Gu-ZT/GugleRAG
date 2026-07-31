@@ -35,12 +35,19 @@ pub struct Database {
 }
 
 #[derive(Clone)]
-pub(crate) struct DocumentEmbedding {
+pub(crate) struct DocumentEmbeddingChunk {
     pub(crate) document_id: Uuid,
+    pub(crate) chunk_index: usize,
     pub(crate) knowledge_base_id: Uuid,
     pub(crate) content_hash: String,
     pub(crate) provider: String,
     pub(crate) model: String,
+    pub(crate) vector: Vec<f32>,
+}
+
+pub(crate) struct NewDocumentEmbeddingChunk {
+    pub(crate) chunk_index: usize,
+    pub(crate) content_hash: String,
     pub(crate) vector: Vec<f32>,
 }
 
@@ -200,6 +207,8 @@ impl Database {
         )
         .execute(&self.pool)
         .await?;
+        // Keep the legacy one-vector table so upgrades remain non-destructive.
+        // Active retrieval uses document_embedding_chunks and rebuilds old documents lazily.
         db_query!(
             self,
             "CREATE TABLE IF NOT EXISTS document_embeddings (
@@ -212,6 +221,24 @@ impl Database {
                 embedding TEXT NOT NULL,
                 created_at VARCHAR(40) NOT NULL,
                 updated_at VARCHAR(40) NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+        db_query!(
+            self,
+            "CREATE TABLE IF NOT EXISTS document_embedding_chunks (
+                document_id VARCHAR(36) NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                knowledge_base_id VARCHAR(36) NOT NULL,
+                content_hash VARCHAR(64) NOT NULL,
+                provider VARCHAR(32) NOT NULL,
+                model VARCHAR(255) NOT NULL,
+                dimensions INTEGER NOT NULL,
+                embedding TEXT NOT NULL,
+                created_at VARCHAR(40) NOT NULL,
+                updated_at VARCHAR(40) NOT NULL,
+                PRIMARY KEY (document_id, chunk_index)
             )",
         )
         .execute(&self.pool)
@@ -728,6 +755,13 @@ impl Database {
         .await?;
         db_query!(
             self,
+            "DELETE FROM document_embedding_chunks WHERE knowledge_base_id = ?"
+        )
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+        db_query!(
+            self,
             "DELETE FROM document_embeddings WHERE knowledge_base_id = ?"
         )
         .bind(id.to_string())
@@ -1066,31 +1100,38 @@ impl Database {
             .collect()
     }
 
-    pub(crate) async fn list_document_embeddings(
+    pub(crate) async fn list_document_embedding_chunks(
         &self,
-    ) -> Result<Vec<DocumentEmbedding>, AppError> {
+    ) -> Result<Vec<DocumentEmbeddingChunk>, AppError> {
         let rows = db_query!(
             self,
-            "SELECT document_id, knowledge_base_id, content_hash, provider, model, dimensions, embedding
-             FROM document_embeddings",
+            "SELECT document_id, chunk_index, knowledge_base_id, content_hash, provider, model, dimensions, embedding
+             FROM document_embedding_chunks",
         )
-            .fetch_all(&self.pool)
-            .await?;
-        rows.into_iter().map(row_to_document_embedding).collect()
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(row_to_document_embedding_chunk)
+            .collect()
     }
 
-    pub(crate) async fn replace_document_embedding(
+    pub(crate) async fn replace_document_embedding_chunks(
         &self,
         document_id: Uuid,
         knowledge_base_id: Uuid,
-        content_hash: &str,
         provider: &str,
         model: &str,
-        vector: &[f32],
+        chunks: &[NewDocumentEmbeddingChunk],
     ) -> Result<(), AppError> {
-        let embedding = to_string(vector)?;
         let now = Utc::now().to_rfc3339();
         let mut transaction = self.pool.begin().await?;
+        db_query!(
+            self,
+            "DELETE FROM document_embedding_chunks WHERE document_id = ?"
+        )
+        .bind(document_id.to_string())
+        .execute(&mut *transaction)
+        .await?;
         db_query!(
             self,
             "DELETE FROM document_embeddings WHERE document_id = ?"
@@ -1098,18 +1139,23 @@ impl Database {
         .bind(document_id.to_string())
         .execute(&mut *transaction)
         .await?;
-        db_query!(
-            self,
-            "INSERT INTO document_embeddings
-             (document_id, knowledge_base_id, content_hash, provider, model, dimensions, embedding, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
+        for chunk in chunks {
+            let embedding = to_string(&chunk.vector)?;
+            db_query!(
+                self,
+                "INSERT INTO document_embedding_chunks
+                 (document_id, chunk_index, knowledge_base_id, content_hash, provider, model, dimensions, embedding, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
             .bind(document_id.to_string())
+            .bind(i32::try_from(chunk.chunk_index).map_err(|_| {
+                AppError::Internal("embedding chunk index exceeds database range".to_string())
+            })?)
             .bind(knowledge_base_id.to_string())
-            .bind(content_hash)
+            .bind(&chunk.content_hash)
             .bind(provider)
             .bind(model)
-            .bind(i32::try_from(vector.len()).map_err(|_| {
+            .bind(i32::try_from(chunk.vector.len()).map_err(|_| {
                 AppError::Internal("embedding dimensions exceed database range".to_string())
             })?)
             .bind(embedding)
@@ -1117,14 +1163,22 @@ impl Database {
             .bind(&now)
             .execute(&mut *transaction)
             .await?;
+        }
         transaction.commit().await?;
         Ok(())
     }
 
-    pub(crate) async fn delete_document_embedding(
+    pub(crate) async fn delete_document_embedding_chunks(
         &self,
         document_id: Uuid,
     ) -> Result<(), AppError> {
+        db_query!(
+            self,
+            "DELETE FROM document_embedding_chunks WHERE document_id = ?"
+        )
+        .bind(document_id.to_string())
+        .execute(&self.pool)
+        .await?;
         db_query!(
             self,
             "DELETE FROM document_embeddings WHERE document_id = ?"
@@ -1269,7 +1323,7 @@ impl Database {
                 .bind(document_id.to_string())
                 .execute(&self.pool)
                 .await?;
-            self.delete_document_embedding(document_id).await?;
+            self.delete_document_embedding_chunks(document_id).await?;
             db_query!(self, "DELETE FROM documents WHERE id = ?")
                 .bind(document_id.to_string())
                 .execute(&self.pool)
@@ -1447,7 +1501,9 @@ fn row_to_document_version(row: sqlx::any::AnyRow) -> Result<DocumentVersion, Ap
     })
 }
 
-fn row_to_document_embedding(row: sqlx::any::AnyRow) -> Result<DocumentEmbedding, AppError> {
+fn row_to_document_embedding_chunk(
+    row: sqlx::any::AnyRow,
+) -> Result<DocumentEmbeddingChunk, AppError> {
     let vector: Vec<f32> = from_str(row.try_get("embedding")?)?;
     let dimensions: i32 = row.try_get("dimensions")?;
     if dimensions < 0 || dimensions as usize != vector.len() {
@@ -1455,8 +1511,15 @@ fn row_to_document_embedding(row: sqlx::any::AnyRow) -> Result<DocumentEmbedding
             "stored embedding dimensions do not match vector data".to_string(),
         ));
     }
-    Ok(DocumentEmbedding {
+    let chunk_index: i32 = row.try_get("chunk_index")?;
+    if chunk_index < 0 {
+        return Err(AppError::Internal(
+            "stored embedding chunk index is negative".to_string(),
+        ));
+    }
+    Ok(DocumentEmbeddingChunk {
         document_id: parse_uuid_str(row.try_get("document_id")?)?,
+        chunk_index: chunk_index as usize,
         knowledge_base_id: parse_uuid_str(row.try_get("knowledge_base_id")?)?,
         content_hash: row.try_get("content_hash")?,
         provider: row.try_get("provider")?,
