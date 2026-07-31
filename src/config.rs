@@ -24,6 +24,7 @@ pub struct Config {
     pub(crate) embedding_model: String,
     pub(crate) embedding_url: String,
     pub(crate) vector_index_path: PathBuf,
+    pub(crate) vector_database_url: Option<String>,
     pub(crate) siliconflow_url: String,
     pub(crate) siliconflow_api_key: String,
     pub(crate) reranker_enabled: bool,
@@ -86,6 +87,9 @@ impl Config {
         let vector_index_path = value("VECTOR_INDEX_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("data/vector-index"));
+        let vector_database_url = value("VECTOR_DATABASE_URL")
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
         Self {
             host: value("SERVER_HOST").unwrap_or_else(|| "0.0.0.0".to_string()),
             port: value("SERVER_PORT")
@@ -103,6 +107,7 @@ impl Config {
             embedding_model: value("EMBEDDING_MODEL").unwrap_or_else(|| "none".to_string()),
             embedding_url,
             vector_index_path,
+            vector_database_url,
             siliconflow_url,
             siliconflow_api_key: value("SILICONFLOW_API_KEY").unwrap_or_default(),
             reranker_enabled: parse_env_bool(value("RERANKER_ENABLED").as_deref(), false),
@@ -130,6 +135,7 @@ impl Config {
             embedding_url: "https://api.siliconflow.cn/v1/embeddings".to_string(),
             vector_index_path: env::temp_dir()
                 .join(format!("guglerag-vector-index-{}", Uuid::new_v4())),
+            vector_database_url: None,
             siliconflow_url: "https://api.siliconflow.cn".to_string(),
             siliconflow_api_key: String::new(),
             reranker_enabled: false,
@@ -152,6 +158,7 @@ impl Config {
             && self.embedding_model == other.embedding_model
             && self.embedding_url == other.embedding_url
             && self.vector_index_path == other.vector_index_path
+            && self.vector_database_url == other.vector_database_url
             && self.siliconflow_url == other.siliconflow_url
             && self.siliconflow_api_key == other.siliconflow_api_key
             && self.reranker_enabled == other.reranker_enabled
@@ -198,6 +205,20 @@ impl DatabaseConfig {
     }
 }
 
+impl Config {
+    pub(crate) fn vector_database_redacted_url(&self) -> Option<String> {
+        self.vector_database_url.as_deref().map(redact_database_url)
+    }
+
+    pub(crate) fn vector_store_name(&self) -> &'static str {
+        if self.vector_database_url.is_some() {
+            "postgres-pgvector"
+        } else {
+            "embedded-hnsw"
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct SetupRequest {
     pub server_host: String,
@@ -212,6 +233,8 @@ pub struct SetupRequest {
     pub embedding_url: String,
     #[serde(default = "default_vector_index_path")]
     pub vector_index_path: String,
+    #[serde(default)]
+    pub vector_database_url: String,
     pub siliconflow_url: Option<String>,
     pub siliconflow_api_key: Option<String>,
     pub reranker_enabled: bool,
@@ -239,6 +262,9 @@ pub fn validate_setup(input: &SetupRequest) -> Result<(), AppError> {
         ));
     }
     validate_database_url(&input.database_url)?;
+    if !input.vector_database_url.trim().is_empty() {
+        validate_vector_database_url(&input.vector_database_url)?;
+    }
     match input.embedding_provider.as_str() {
         "stub" | "local" | "siliconflow" => {}
         _ => {
@@ -325,6 +351,17 @@ pub fn validate_database_url(url: &str) -> Result<DatabaseEngine, AppError> {
     }
 }
 
+pub fn validate_vector_database_url(url: &str) -> Result<(), AppError> {
+    let url = url.trim();
+    if url.starts_with("postgres://") || url.starts_with("postgresql://") {
+        Ok(())
+    } else {
+        Err(AppError::BadRequest(
+            "VECTOR_DATABASE_URL must start with postgres:// or postgresql://".to_string(),
+        ))
+    }
+}
+
 pub(crate) async fn prepare_database_path(database: &DatabaseConfig) {
     if !matches!(database.engine, DatabaseEngine::Sqlite) {
         return;
@@ -396,6 +433,10 @@ pub fn render_env_file(input: &SetupRequest) -> String {
             } else {
                 input.vector_index_path.trim()
             })
+        ),
+        format!(
+            "VECTOR_DATABASE_URL={}",
+            env_escape(input.vector_database_url.trim())
         ),
         format!("SILICONFLOW_URL={}", env_escape(siliconflow_url)),
         format!("SILICONFLOW_API_KEY={}", env_escape(siliconflow_api_key)),

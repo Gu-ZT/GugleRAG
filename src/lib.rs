@@ -147,6 +147,10 @@ pub async fn run() {
             embedding_model = %config.embedding_model,
             embedding_url = %config.embedding_url,
             vector_index_path = %config.vector_index_path.display(),
+            vector_database = %config
+                .vector_database_redacted_url()
+                .unwrap_or_else(|| "embedded-hnsw".to_string()),
+            vector_store = config.vector_store_name(),
             reranker_enabled = config.reranker_enabled,
             reranker_provider = %config.reranker_provider,
             reranker_model = %config.reranker_model,
@@ -167,9 +171,13 @@ pub async fn run() {
                 .expect("failed to configure search engine"),
         );
         match search.reindex_all().await {
-            Ok(indexed_documents) => info!(indexed_documents, "document HNSW indexes are ready"),
+            Ok(indexed_documents) => info!(
+                indexed_documents,
+                vector_store = search.vector_store_name(),
+                "document vector indexes are ready"
+            ),
             Err(error) => {
-                warn!("failed to rebuild HNSW document index: {error}");
+                warn!("failed to rebuild document vector indexes: {error}");
             }
         }
 

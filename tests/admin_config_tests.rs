@@ -99,6 +99,7 @@ async fn only_administrators_can_update_configuration_and_restart() {
         "registration_enabled": false,
         "embedding_provider": "stub",
         "embedding_model": "none",
+        "vector_database_url": "",
         "siliconflow_url": "https://api.siliconflow.cn",
         "siliconflow_api_key": "",
         "reranker_enabled": true,
@@ -135,7 +136,8 @@ async fn only_administrators_can_update_configuration_and_restart() {
     assert!(env_file.contains("SERVER_PORT=9191"));
     assert!(env_file.contains("RERANKER_ENABLED=true"));
     assert!(env_file.contains("MCP_PUBLIC_URL=https://kb.example.com"));
-    assert!(env_file.contains("VECTOR_INDEX_PATH=\""));
+    assert!(env_file.contains("VECTOR_INDEX_PATH="));
+    assert!(env_file.contains("VECTOR_DATABASE_URL=\n"));
 
     let (status, persisted) = json_request(
         &app,

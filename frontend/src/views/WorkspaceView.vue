@@ -39,7 +39,7 @@ import type {
   TeamInvitation,
   TeamMember,
   Workspace,
-  ZipImportResult
+  ZipImportStatus
 } from "../types";
 
 type McpScope = "user" | "group" | "all";
@@ -66,6 +66,8 @@ const expandedKnowledgeBaseIds = ref<Set<string>>(new Set());
 const expandedFolderIds = ref<Set<string>>(new Set());
 const zipInput = ref<HTMLInputElement | null>(null);
 const zipKnowledgeBaseId = ref("");
+const zipUploadProgress = ref(0);
+const zipImportStatus = ref<ZipImportStatus | null>(null);
 const teams = ref<Team[]>([]);
 const teamMembers = ref<TeamMember[]>([]);
 const invitations = ref<TeamInvitation[]>([]);
@@ -76,6 +78,30 @@ const mcpTokens = ref<McpToken[]>([]);
 const mcpConfigScope = ref<McpScope | null>(null);
 const mcpExpiryDays = ref(30);
 const lastInviteToken = ref("");
+
+const zipImporting = computed(() => {
+  const status = zipImportStatus.value?.status;
+  return zipUploadProgress.value > 0 || status === "queued" || status === "processing";
+});
+const zipProgressPercent = computed(() => {
+  if (!zipImportStatus.value) {
+    return zipUploadProgress.value;
+  }
+  return Math.min(100, 20 + Math.round(zipImportStatus.value.progress * 0.8));
+});
+const zipProgressLabel = computed(() => {
+  if (!zipImportStatus.value) {
+    return "正在上传 ZIP 文件…";
+  }
+  if (zipImportStatus.value.status === "queued") {
+    return "等待导入任务开始…";
+  }
+  if (zipImportStatus.value.status === "processing") {
+    const { processed_entries: processed, total_entries: total } = zipImportStatus.value;
+    return total ? `正在处理 ${processed} / ${total} 项` : "正在解析 ZIP 文件…";
+  }
+  return zipImportStatus.value.status === "completed" ? "导入完成" : "导入失败";
+});
 
 const authForm = reactive({ username: "", password: "", display_name: "" });
 const editor = reactive({ title: "", content: "", tags: "" });
@@ -107,6 +133,10 @@ function toast(kind: Toast["kind"], message: string) {
   window.setTimeout(() => {
     toasts.value = toasts.value.filter((item) => item.id !== id);
   }, 3600);
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
 const hasActiveDoc = computed(() => Boolean(activeDoc.value?.id));
@@ -568,17 +598,14 @@ async function importZip(event: Event) {
     toast("error", "ZIP 文件不能超过 10 MB");
     return;
   }
+  zipUploadProgress.value = 1;
+  zipImportStatus.value = null;
   try {
     const formData = new FormData();
     formData.append("archive", archive);
-    const result = await request<ZipImportResult>(
-      `/api/knowledge-bases/${knowledgeBaseId}/import-zip`,
-      {
-        method: "POST",
-        headers: authHeaders(),
-        body: formData
-      }
-    );
+    const accepted = await uploadZipArchive(knowledgeBaseId, formData);
+    zipUploadProgress.value = 100;
+    const result = await waitForZipImport(knowledgeBaseId, accepted.job_id);
     await loadDocuments(knowledgeBaseId);
     await selectKnowledgeBase(knowledgeBaseId, false);
     expandedKnowledgeBaseIds.value = new Set([...expandedKnowledgeBaseIds.value, knowledgeBaseId]);
@@ -597,7 +624,63 @@ async function importZip(event: Event) {
   } finally {
     input.value = "";
     zipKnowledgeBaseId.value = "";
+    zipUploadProgress.value = 0;
+    zipImportStatus.value = null;
   }
+}
+
+function uploadZipArchive(knowledgeBaseId: string, body: FormData): Promise<ZipImportStatus> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `/api/knowledge-bases/${knowledgeBaseId}/import-zip`);
+    xhr.setRequestHeader("Authorization", `Bearer ${token.value}`);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        zipUploadProgress.value = Math.max(1, Math.round((event.loaded / event.total) * 20));
+      }
+    };
+    xhr.onerror = () => reject(new Error("ZIP 文件上传失败"));
+    xhr.onload = () => {
+      let payload: ZipImportStatus | { error?: string };
+      try {
+        payload = JSON.parse(xhr.responseText) as ZipImportStatus | { error?: string };
+      } catch {
+        reject(new Error(`ZIP 导入请求失败（HTTP ${xhr.status}）`));
+        return;
+      }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(
+          new Error(
+            "error" in payload && payload.error
+              ? payload.error
+              : `ZIP 导入请求失败（HTTP ${xhr.status}）`
+          )
+        );
+        return;
+      }
+      resolve(payload as ZipImportStatus);
+    };
+    xhr.send(body);
+  });
+}
+
+async function waitForZipImport(knowledgeBaseId: string, jobId: string): Promise<ZipImportStatus> {
+  const deadline = Date.now() + 5 * 60 * 1000;
+  while (Date.now() < deadline) {
+    const status = await request<ZipImportStatus>(
+      `/api/knowledge-bases/${knowledgeBaseId}/import-zip/${jobId}`,
+      { headers: authHeaders() }
+    );
+    zipImportStatus.value = status;
+    if (status.status === "completed") {
+      return status;
+    }
+    if (status.status === "failed") {
+      throw new Error(status.error || "ZIP 导入失败");
+    }
+    await delay(450);
+  }
+  throw new Error("ZIP 导入超时，请稍后检查文档列表");
 }
 
 async function saveDocument() {
@@ -926,6 +1009,29 @@ onUnmounted(() => {
   <div class="toast-stack" aria-live="polite">
     <div v-for="item in toasts" :key="item.id" class="toast" :class="item.kind">{{ item.message }}</div>
   </div>
+  <section
+    v-if="zipImporting"
+    class="zip-import-progress"
+    role="status"
+    aria-live="polite"
+    aria-atomic="true"
+  >
+    <div class="zip-import-progress-header">
+      <span>导入 ZIP</span>
+      <strong>{{ zipProgressPercent }}%</strong>
+    </div>
+    <div
+      class="zip-import-progress-track"
+      role="progressbar"
+      aria-label="ZIP 导入进度"
+      :aria-valuenow="zipProgressPercent"
+      aria-valuemin="0"
+      aria-valuemax="100"
+    >
+      <span class="zip-import-progress-fill" :style="{ width: `${zipProgressPercent}%` }" />
+    </div>
+    <p>{{ zipProgressLabel }}</p>
+  </section>
   <input ref="zipInput" class="zip-import-input" type="file" accept=".zip,application/zip" @change="importZip" />
 
   <!-- 登录 / 注册 -->
@@ -1056,6 +1162,7 @@ onUnmounted(() => {
                     class="knowledge-action-btn"
                     title="导入 ZIP 文件"
                     aria-label="导入 ZIP 文件"
+                    :disabled="zipImporting"
                     @click.stop="chooseZipImport(knowledgeBase.id)"
                   >
                     <Upload :size="14" />

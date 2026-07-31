@@ -10,11 +10,12 @@ use axum::{
     extract::{Multipart, Path, Query, State},
     http::{HeaderMap, StatusCode},
 };
-use chrono::Utc;
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     io::{Cursor, Read},
+    sync::{Mutex, OnceLock},
 };
 use uuid::Uuid;
 use zip::ZipArchive;
@@ -46,7 +47,7 @@ pub(crate) struct ListQuery {
     pub(crate) tree: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct ZipImportResult {
     imported_files: usize,
     created_folders: usize,
@@ -54,10 +55,45 @@ pub(crate) struct ZipImportResult {
     skips: Vec<ZipImportSkip>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct ZipImportSkip {
     path: String,
     reason: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum ZipImportJobStatus {
+    Queued,
+    Processing,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone)]
+struct ZipImportJob {
+    user_id: Uuid,
+    knowledge_base_id: Uuid,
+    status: ZipImportJobStatus,
+    processed_entries: usize,
+    total_entries: usize,
+    result: Option<ZipImportResult>,
+    error: Option<String>,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ZipImportStatusResponse {
+    job_id: Uuid,
+    status: ZipImportJobStatus,
+    processed_entries: usize,
+    total_entries: usize,
+    progress: u8,
+    imported_files: usize,
+    created_folders: usize,
+    skipped_entries: usize,
+    skips: Vec<ZipImportSkip>,
+    error: Option<String>,
 }
 
 struct ZipImportEntry {
@@ -67,6 +103,107 @@ struct ZipImportEntry {
 }
 
 type DocumentLocation = (Option<Uuid>, String);
+
+static ZIP_IMPORT_JOBS: OnceLock<Mutex<HashMap<Uuid, ZipImportJob>>> = OnceLock::new();
+
+fn zip_import_jobs() -> &'static Mutex<HashMap<Uuid, ZipImportJob>> {
+    ZIP_IMPORT_JOBS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn register_zip_import(user_id: Uuid, knowledge_base_id: Uuid) -> Uuid {
+    let job_id = Uuid::new_v4();
+    let mut jobs = zip_import_jobs()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let cutoff = Utc::now() - Duration::hours(1);
+    jobs.retain(|_, job| job.created_at > cutoff);
+    jobs.insert(
+        job_id,
+        ZipImportJob {
+            user_id,
+            knowledge_base_id,
+            status: ZipImportJobStatus::Queued,
+            processed_entries: 0,
+            total_entries: 0,
+            result: None,
+            error: None,
+            created_at: Utc::now(),
+        },
+    );
+    job_id
+}
+
+fn update_zip_import_progress(job_id: Uuid, processed_entries: usize, total_entries: usize) {
+    let mut jobs = zip_import_jobs()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(job) = jobs.get_mut(&job_id) {
+        job.status = ZipImportJobStatus::Processing;
+        job.processed_entries = processed_entries.min(total_entries);
+        job.total_entries = total_entries;
+    }
+}
+
+fn complete_zip_import(job_id: Uuid, result: ZipImportResult) {
+    let mut jobs = zip_import_jobs()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(job) = jobs.get_mut(&job_id) {
+        job.status = ZipImportJobStatus::Completed;
+        job.processed_entries = job.total_entries;
+        job.result = Some(result);
+        job.error = None;
+    }
+}
+
+fn fail_zip_import(job_id: Uuid, error: String) {
+    let mut jobs = zip_import_jobs()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(job) = jobs.get_mut(&job_id) {
+        job.status = ZipImportJobStatus::Failed;
+        job.error = Some(error);
+    }
+}
+
+fn zip_import_scope(job_id: Uuid) -> Option<(Uuid, Uuid)> {
+    zip_import_jobs()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&job_id)
+        .map(|job| (job.user_id, job.knowledge_base_id))
+}
+
+fn zip_import_status_response(job_id: Uuid) -> Option<ZipImportStatusResponse> {
+    let jobs = zip_import_jobs()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let job = jobs.get(&job_id)?;
+    let progress = if job.status == ZipImportJobStatus::Completed {
+        100
+    } else if job.total_entries == 0 {
+        0
+    } else {
+        job.processed_entries
+            .saturating_mul(100)
+            .checked_div(job.total_entries)
+            .unwrap_or_default()
+            .min(99) as u8
+    };
+    let result = job.result.as_ref();
+    Some(ZipImportStatusResponse {
+        job_id,
+        status: job.status,
+        processed_entries: job.processed_entries,
+        total_entries: job.total_entries,
+        progress,
+        imported_files: result.map_or(0, |result| result.imported_files),
+        created_folders: result.map_or(0, |result| result.created_folders),
+        skipped_entries: result.map_or(0, |result| result.skipped_entries),
+        skips: result.map_or_else(Vec::new, |result| result.skips.clone()),
+        error: job.error.clone(),
+    })
+}
 
 pub(crate) async fn list_documents(
     State(state): State<AppState>,
@@ -148,11 +285,57 @@ pub(crate) async fn import_zip(
     headers: HeaderMap,
     Path(knowledge_base_id): Path<Uuid>,
     mut multipart: Multipart,
-) -> Result<Json<ZipImportResult>, AppError> {
+) -> Result<(StatusCode, Json<ZipImportStatusResponse>), AppError> {
     let user_id = require_editor(&state, &headers).await?;
     collaboration::require_knowledge_base_access(&state, user_id, knowledge_base_id).await?;
     let archive_bytes = read_zip_upload(&mut multipart).await?;
-    let (mut result, entries) = {
+    let job_id = register_zip_import(user_id, knowledge_base_id);
+    let task_state = state.clone();
+    tokio::spawn(async move {
+        match process_zip_import(
+            &task_state,
+            user_id,
+            knowledge_base_id,
+            archive_bytes,
+            job_id,
+        )
+        .await
+        {
+            Ok(result) => complete_zip_import(job_id, result),
+            Err(error) => fail_zip_import(job_id, error.to_string()),
+        }
+    });
+    let status = zip_import_status_response(job_id)
+        .ok_or_else(|| AppError::Internal("failed to create ZIP import job".to_string()))?;
+    Ok((StatusCode::ACCEPTED, Json(status)))
+}
+
+pub(crate) async fn zip_import_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((knowledge_base_id, job_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<ZipImportStatusResponse>, AppError> {
+    let user_id = auth::require_user(&headers, &state).await?;
+    collaboration::require_knowledge_base_access(&state, user_id, knowledge_base_id).await?;
+    let Some((owner_id, job_knowledge_base_id)) = zip_import_scope(job_id) else {
+        return Err(AppError::NotFound("ZIP import job not found".to_string()));
+    };
+    if owner_id != user_id || job_knowledge_base_id != knowledge_base_id {
+        return Err(AppError::NotFound("ZIP import job not found".to_string()));
+    }
+    let status = zip_import_status_response(job_id)
+        .ok_or_else(|| AppError::NotFound("ZIP import job not found".to_string()))?;
+    Ok(Json(status))
+}
+
+async fn process_zip_import(
+    state: &AppState,
+    user_id: Uuid,
+    knowledge_base_id: Uuid,
+    archive_bytes: Vec<u8>,
+    job_id: Uuid,
+) -> Result<ZipImportResult, AppError> {
+    let (mut result, entries, archive_entry_count) = {
         let mut archive = ZipArchive::new(Cursor::new(archive_bytes))
             .map_err(|error| AppError::BadRequest(format!("invalid ZIP archive: {error}")))?;
         if archive.len() > MAX_ZIP_ENTRIES {
@@ -160,15 +343,19 @@ pub(crate) async fn import_zip(
                 "ZIP archive contains more than {MAX_ZIP_ENTRIES} entries"
             )));
         }
+        let archive_entry_count = archive.len();
+        update_zip_import_progress(job_id, 0, archive_entry_count);
         let mut result = ZipImportResult {
             imported_files: 0,
             created_folders: 0,
             skipped_entries: 0,
             skips: Vec::new(),
         };
-        let entries = collect_zip_entries(&mut archive, &mut result);
-        (result, entries)
+        let entries = collect_zip_entries(&mut archive, &mut result, job_id);
+        (result, entries, archive_entry_count)
     };
+    let total_entries = archive_entry_count.saturating_add(entries.len());
+    update_zip_import_progress(job_id, archive_entry_count, total_entries);
     let existing_documents = state
         .database
         .all_documents_for_knowledge_base(knowledge_base_id)
@@ -177,79 +364,100 @@ pub(crate) async fn import_zip(
         .into_iter()
         .map(|document| ((document.parent_id, document.title.clone()), document))
         .collect::<HashMap<DocumentLocation, Document>>();
-    for entry in entries {
-        let ZipImportEntry {
-            path,
-            components,
-            content,
-        } = entry;
-        let Some(content) = content else {
-            if components.is_empty() {
-                continue;
-            }
-            if let Err(error) = ensure_folder_path(
-                &state,
-                &mut documents_by_location,
-                &mut result,
-                knowledge_base_id,
-                user_id,
-                &components,
-            )
-            .await
-            {
-                record_skip(&mut result, path, error.to_string());
-            }
-            continue;
-        };
-
-        let (file_name, parent_components) = components
-            .split_last()
-            .expect("non-empty ZIP path components");
-        let parent_id = match ensure_folder_path(
-            &state,
+    for (index, entry) in entries.into_iter().enumerate() {
+        import_zip_entry(
+            state,
             &mut documents_by_location,
             &mut result,
             knowledge_base_id,
             user_id,
-            parent_components,
+            entry,
+        )
+        .await?;
+        update_zip_import_progress(
+            job_id,
+            archive_entry_count.saturating_add(index + 1),
+            total_entries,
+        );
+    }
+
+    Ok(result)
+}
+
+async fn import_zip_entry(
+    state: &AppState,
+    documents_by_location: &mut HashMap<DocumentLocation, Document>,
+    result: &mut ZipImportResult,
+    knowledge_base_id: Uuid,
+    user_id: Uuid,
+    entry: ZipImportEntry,
+) -> Result<(), AppError> {
+    let ZipImportEntry {
+        path,
+        components,
+        content,
+    } = entry;
+    let Some(content) = content else {
+        if components.is_empty() {
+            return Ok(());
+        }
+        if let Err(error) = ensure_folder_path(
+            state,
+            documents_by_location,
+            result,
+            knowledge_base_id,
+            user_id,
+            &components,
         )
         .await
         {
-            Ok(parent_id) => parent_id,
-            Err(error) => {
-                record_skip(&mut result, path, error.to_string());
-                continue;
-            }
-        };
-        let location = (parent_id, file_name.clone());
-        if documents_by_location.contains_key(&location) {
-            record_skip(
-                &mut result,
-                path,
-                "an item with the same name already exists",
-            );
-            continue;
+            record_skip(result, path, error.to_string());
         }
-        let now = Utc::now();
-        let document = Document {
-            id: Uuid::new_v4(),
-            knowledge_base_id,
-            title: file_name.clone(),
-            content,
-            parent_id,
-            is_folder: false,
-            tags: Vec::new(),
-            author_id: user_id,
-            created_at: now,
-            updated_at: now,
-            versions: Vec::new(),
-        };
-        state.database.insert_document(&document).await?;
-        documents_by_location.insert(location, document);
-        result.imported_files += 1;
-    }
+        return Ok(());
+    };
 
-    Ok(Json(result))
+    let (file_name, parent_components) = components
+        .split_last()
+        .expect("non-empty ZIP path components");
+    let parent_id = match ensure_folder_path(
+        state,
+        documents_by_location,
+        result,
+        knowledge_base_id,
+        user_id,
+        parent_components,
+    )
+    .await
+    {
+        Ok(parent_id) => parent_id,
+        Err(error) => {
+            record_skip(result, path, error.to_string());
+            return Ok(());
+        }
+    };
+    let location = (parent_id, file_name.clone());
+    if documents_by_location.contains_key(&location) {
+        record_skip(result, path, "an item with the same name already exists");
+        return Ok(());
+    }
+    let now = Utc::now();
+    let document = Document {
+        id: Uuid::new_v4(),
+        knowledge_base_id,
+        title: file_name.clone(),
+        content,
+        parent_id,
+        is_folder: false,
+        tags: Vec::new(),
+        author_id: user_id,
+        created_at: now,
+        updated_at: now,
+        versions: Vec::new(),
+    };
+    state.database.insert_document(&document).await?;
+    documents_by_location.insert(location, document);
+    result.imported_files += 1;
+    Ok(())
 }
 
 pub(crate) async fn read_document(
@@ -423,14 +631,17 @@ async fn read_zip_upload(multipart: &mut Multipart) -> Result<Vec<u8>, AppError>
 fn collect_zip_entries(
     archive: &mut ZipArchive<Cursor<Vec<u8>>>,
     result: &mut ZipImportResult,
+    job_id: Uuid,
 ) -> Vec<ZipImportEntry> {
     let mut entries = Vec::new();
     let mut extracted_bytes = 0u64;
-    for index in 0..archive.len() {
+    let total_entries = archive.len();
+    for index in 0..total_entries {
         let entry = match archive.by_index(index) {
             Ok(entry) => entry,
             Err(error) => {
                 record_skip(result, format!("entry-{index}"), error.to_string());
+                update_zip_import_progress(job_id, index + 1, total_entries);
                 continue;
             }
         };
@@ -439,6 +650,7 @@ fn collect_zip_entries(
             Ok(components) => components,
             Err(reason) => {
                 record_skip(result, path, reason);
+                update_zip_import_progress(job_id, index + 1, total_entries);
                 continue;
             }
         };
@@ -448,10 +660,12 @@ fn collect_zip_entries(
                 components,
                 content: None,
             });
+            update_zip_import_progress(job_id, index + 1, total_entries);
             continue;
         }
         if components.is_empty() {
             record_skip(result, path, "entry has no file name");
+            update_zip_import_progress(job_id, index + 1, total_entries);
             continue;
         }
         let declared_size = entry.size();
@@ -461,6 +675,7 @@ fn collect_zip_entries(
                 path,
                 format!("file exceeds the {MAX_TEXT_FILE_BYTES}-byte limit"),
             );
+            update_zip_import_progress(job_id, index + 1, total_entries);
             continue;
         }
         if extracted_bytes.saturating_add(declared_size) > MAX_TOTAL_EXTRACTED_BYTES {
@@ -469,12 +684,14 @@ fn collect_zip_entries(
                 path,
                 format!("archive exceeds the {MAX_TOTAL_EXTRACTED_BYTES}-byte extracted limit"),
             );
+            update_zip_import_progress(job_id, index + 1, total_entries);
             continue;
         }
         let mut bytes = Vec::with_capacity(declared_size as usize);
         let mut limited_reader = entry.take(MAX_TEXT_FILE_BYTES + 1);
         if let Err(error) = limited_reader.read_to_end(&mut bytes) {
             record_skip(result, path, format!("could not read file: {error}"));
+            update_zip_import_progress(job_id, index + 1, total_entries);
             continue;
         }
         let actual_size = bytes.len() as u64;
@@ -484,6 +701,7 @@ fn collect_zip_entries(
                 path,
                 format!("file exceeds the {MAX_TEXT_FILE_BYTES}-byte limit"),
             );
+            update_zip_import_progress(job_id, index + 1, total_entries);
             continue;
         }
         if extracted_bytes.saturating_add(actual_size) > MAX_TOTAL_EXTRACTED_BYTES {
@@ -492,12 +710,14 @@ fn collect_zip_entries(
                 path,
                 format!("archive exceeds the {MAX_TOTAL_EXTRACTED_BYTES}-byte extracted limit"),
             );
+            update_zip_import_progress(job_id, index + 1, total_entries);
             continue;
         }
         let content = match decode_text(bytes) {
             Ok(content) => content,
             Err(reason) => {
                 record_skip(result, path, reason);
+                update_zip_import_progress(job_id, index + 1, total_entries);
                 continue;
             }
         };
@@ -507,6 +727,7 @@ fn collect_zip_entries(
             components,
             content: Some(content),
         });
+        update_zip_import_progress(job_id, index + 1, total_entries);
     }
     entries
 }

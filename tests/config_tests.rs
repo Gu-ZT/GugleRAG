@@ -1,6 +1,6 @@
 use gugle_rag::config::{
     DatabaseConfig, DatabaseEngine, SetupRequest, render_env_file, validate_database_url,
-    validate_setup,
+    validate_setup, validate_vector_database_url,
 };
 
 fn valid_setup() -> SetupRequest {
@@ -14,6 +14,7 @@ fn valid_setup() -> SetupRequest {
         embedding_model: "none".to_string(),
         embedding_url: "https://api.siliconflow.cn/v1/embeddings".to_string(),
         vector_index_path: "data/vector-index".to_string(),
+        vector_database_url: String::new(),
         siliconflow_url: None,
         siliconflow_api_key: None,
         reranker_enabled: true,
@@ -75,6 +76,20 @@ fn setup_validation_and_env_rendering_include_reranker_settings() {
     assert!(output.contains("RERANKER_MODEL=BAAI/bge-reranker-v2-m3"));
     assert!(output.contains("RERANKER_URL=http://127.0.0.1:9000/rerank"));
     assert!(output.contains("VECTOR_INDEX_PATH=data/vector-index"));
+    assert!(output.contains("VECTOR_DATABASE_URL=\n"));
+}
+
+#[test]
+fn vector_database_requires_a_postgresql_url() {
+    assert!(validate_vector_database_url("postgresql://user:pass@localhost/vectors").is_ok());
+    assert!(validate_vector_database_url("postgres://user:pass@localhost/vectors").is_ok());
+    assert!(validate_vector_database_url("sqlite://data/vectors.db").is_err());
+
+    let mut input = valid_setup();
+    input.vector_database_url = "postgresql://user:pass@localhost/vectors".to_string();
+    validate_setup(&input).unwrap();
+    let output = render_env_file(&input);
+    assert!(output.contains("VECTOR_DATABASE_URL=postgresql://user:pass@localhost/vectors"));
 }
 
 #[test]

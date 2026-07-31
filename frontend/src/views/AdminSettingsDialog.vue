@@ -39,6 +39,7 @@ const form = reactive<AdminConfigPayload>({
   embedding_provider: "siliconflow",
   embedding_model: "BAAI/bge-m3",
   embedding_url: "https://api.siliconflow.cn/v1/embeddings",
+  vector_database_url: "",
   siliconflow_url: "https://api.siliconflow.cn",
   siliconflow_api_key: "",
   reranker_enabled: false,
@@ -254,6 +255,15 @@ onMounted(loadConfig);
                 <label>嵌入调用 URL<input v-model.trim="form.embedding_url" /></label>
                 <label>SiliconFlow URL<input v-model.trim="form.siliconflow_url" /></label>
               </div>
+              <label>
+                PostgreSQL 向量数据库（可选）
+                <input
+                  v-model.trim="form.vector_database_url"
+                  autocomplete="off"
+                  placeholder="postgresql://user:password@127.0.0.1:5432/vectors"
+                />
+              </label>
+              <p class="hint">填写后使用 PostgreSQL 的 pgvector 存储和检索；留空使用本地 HNSW 索引。</p>
               <div class="field-grid">
                 <label>
                   SiliconFlow API Key

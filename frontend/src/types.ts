@@ -17,6 +17,7 @@ export interface SetupStatus {
     embedding_provider: string;
     embedding_model: string;
     embedding_url: string;
+    vector_database_url: string;
     reranker_enabled: boolean;
     reranker_provider: string;
     reranker_model: string;
@@ -33,6 +34,7 @@ export interface SetupPayload {
   embedding_provider: "stub" | "local" | "siliconflow";
   embedding_model: string;
   embedding_url: string;
+  vector_database_url: string;
   siliconflow_url: string;
   siliconflow_api_key: string;
   reranker_enabled: boolean;
@@ -59,6 +61,7 @@ export interface AdminConfigValues {
   embedding_provider: "stub" | "local" | "siliconflow";
   embedding_model: string;
   embedding_url: string;
+  vector_database_url: string;
   siliconflow_url: string;
   reranker_enabled: boolean;
   reranker_provider: "none" | "local" | "siliconflow" | "custom_http";
@@ -139,6 +142,15 @@ export interface ZipImportResult {
     path: string;
     reason: string;
   }>;
+}
+
+export interface ZipImportStatus extends ZipImportResult {
+  job_id: string;
+  status: "queued" | "processing" | "completed" | "failed";
+  processed_entries: number;
+  total_entries: number;
+  progress: number;
+  error: string | null;
 }
 
 export interface SearchResult {

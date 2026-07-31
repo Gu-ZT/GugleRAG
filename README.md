@@ -81,11 +81,11 @@ agents.
 
 The backend stores users, workspaces, teams, memberships, knowledge bases, documents, versions, invitations, and
 document metadata through SQLx. Runtime configuration accepts SQLite, MySQL, and PostgreSQL `DATABASE_URL` values.
-Active vector retrieval uses an embedded Rust HNSW index. Each knowledge base is persisted as one binary file under
-`VECTOR_INDEX_PATH` (default `data/vector-index`), so the server remains a single executable without a separate vector
-database service. SQL vector records from previous versions are kept as migration sources and are removed after their
-vectors have been rebuilt into HNSW. SQL remains the source of truth for document content and permissions; HNSW is a
-rebuildable derived index.
+Active vector retrieval uses an embedded Rust HNSW index by default. Each knowledge base is persisted as one binary file
+under `VECTOR_INDEX_PATH` (default `data/vector-index`), so the server remains a single executable without a separate
+vector database service. Set `VECTOR_DATABASE_URL` to a PostgreSQL URL when the `pgvector` extension is available to
+store and search vectors in a separate PostgreSQL database instead. SQL remains the source of truth for document content
+and permissions; either vector backend is a rebuildable derived index.
 
 ## First Run
 
@@ -107,6 +107,7 @@ wizard and writes `.env` through `/api/setup` with:
 - `DATABASE_URL` for SQLite, MySQL, or PostgreSQL
 - `JWT_SECRET`
 - embedding, complete SiliconFlow endpoint, and model settings
+- optional PostgreSQL `pgvector` database URL for vector storage
 - optional reranker settings
 - MCP enablement and auth requirement
 - optional `MCP_PUBLIC_URL` for reverse-proxy deployments
@@ -257,21 +258,27 @@ Embedding and vector indexing are controlled by:
 - `SILICONFLOW_URL=https://api.siliconflow.cn`
 - `SILICONFLOW_API_KEY=sk-...` for SiliconFlow embeddings or reranking
 - `VECTOR_INDEX_PATH=data/vector-index`
+- `VECTOR_DATABASE_URL=postgresql://user:password@127.0.0.1:5432/vectors` (optional)
 
 The setup wizard defaults to SiliconFlow with `BAAI/bge-m3`. The default embedding request URL is the complete
 `https://api.siliconflow.cn/v1/embeddings` endpoint; `SILICONFLOW_URL` remains the API base used to derive the reranker
 endpoint. `local` uses the configured `EMBEDDING_URL` as an OpenAI-compatible HTTP endpoint. `stub` is a deterministic
 offline provider intended for tests and installations that are not ready to call a model service.
 
-For every non-folder document, GugleRAG keeps the title and tags as context on overlapping content chunks. The chunk
+Leave `VECTOR_DATABASE_URL` empty to use the embedded HNSW backend. When it is set, the target PostgreSQL database must
+have the `vector` extension available; GugleRAG creates its vector table and filter/HNSW indexes on first use. The
+vector database URL is independent of `DATABASE_URL`, so document metadata and vectors can be placed in different
+databases. For every non-folder document, GugleRAG keeps the title and tags as context on overlapping content chunks. The chunk
 window is selected from the configured model's documented input limit with a conservative character budget: 384
 characters for the 512-token BGE-large/BCE models, 6,144 characters for the 8,192-token BGE-M3 models, and 8,192
-characters for the 32,768-token Qwen3-Embedding models. Other models use a 4,000-character fallback. Chunk vectors
-and their text, content hashes, provider, and model are stored in the knowledge base's HNSW file. Existing HNSW
-indexes are reused when the document set, content hashes, provider, and model match; otherwise the index is rebuilt.
+characters for the 32,768-token Qwen3-Embedding models. Other models use a 4,000-character fallback. Chunk vectors,
+text, content hashes, provider, and model are stored in the selected backend. Existing indexes or PostgreSQL rows are
+reused when the document set, content hashes, provider, and model match; otherwise that knowledge base is rebuilt.
 Search ranks a document by its best matching chunk and sends that chunk to the optional reranker. The server rebuilds
 missing or stale indexes at startup; a first search also performs lazy indexing. SQL vectors from earlier versions are
-automatically migrated when possible and regenerated when the old vector does not represent the current chunk layout.
+automatically migrated into the selected backend when possible and regenerated when the old vector does not represent
+the current chunk layout. Models above pgvector's HNSW dimension limit remain supported through PostgreSQL exact vector
+search.
 
 Reranking is optional and controlled by:
 

@@ -163,7 +163,8 @@ pub(crate) async fn delete_knowledge_base(
     }
     state
         .search
-        .remove_knowledge_base_index(knowledge_base_id)?;
+        .remove_knowledge_base_index(knowledge_base_id)
+        .await?;
     state
         .database
         .delete_knowledge_base(knowledge_base_id)

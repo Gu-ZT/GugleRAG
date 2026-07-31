@@ -84,5 +84,9 @@ pub(crate) fn router() -> Router<AppState> {
             post(documents::import_zip)
                 .layer(DefaultBodyLimit::max(documents::MAX_ZIP_MULTIPART_BYTES)),
         )
+        .route(
+            "/api/knowledge-bases/{knowledge_base_id}/import-zip/{job_id}",
+            get(documents::zip_import_status),
+        )
         .route("/api/search", get(search::search_documents))
 }

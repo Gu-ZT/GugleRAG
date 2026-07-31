@@ -81,7 +81,10 @@ impl SearchEngine {
             database,
             embedder: EmbeddingService::from_config(config)?,
             reranker: RerankerService::from_config(config)?,
-            vector_store: VectorStore::new(config.vector_index_path.clone())?,
+            vector_store: VectorStore::new(
+                config.vector_index_path.clone(),
+                config.vector_database_url.as_deref(),
+            )?,
             embedding_lock: Arc::new(Mutex::new(())),
         })
     }
@@ -92,11 +95,15 @@ impl SearchEngine {
         Ok(vectors.len())
     }
 
-    pub(crate) fn remove_knowledge_base_index(
+    pub(crate) fn vector_store_name(&self) -> &'static str {
+        self.vector_store.backend_name()
+    }
+
+    pub(crate) async fn remove_knowledge_base_index(
         &self,
         knowledge_base_id: Uuid,
     ) -> Result<(), AppError> {
-        self.vector_store.remove_index(knowledge_base_id)
+        self.vector_store.remove_index(knowledge_base_id).await
     }
 
     pub(crate) async fn search_documents(
@@ -173,9 +180,16 @@ impl SearchEngine {
                 .saturating_mul(4)
                 .clamp(64, 256);
             for knowledge_base_id in knowledge_base_ids {
-                for hit in
-                    self.vector_store
-                        .search(knowledge_base_id, &query_vector, candidate_count)
+                for hit in self
+                    .vector_store
+                    .search(
+                        knowledge_base_id,
+                        self.embedder.provider_name(),
+                        self.embedder.model(),
+                        &query_vector,
+                        candidate_count,
+                    )
+                    .await?
                 {
                     if !allowed_documents.contains(&hit.entry.document_id) {
                         continue;
@@ -300,12 +314,16 @@ impl SearchEngine {
         let mut current_points = HashMap::<(Uuid, usize), VectorIndexPoint>::new();
         let mut current_knowledge_bases = HashSet::new();
         for (knowledge_base_id, expected) in &expected_by_knowledge_base {
-            if let Some(points) = self.vector_store.current_points(
-                *knowledge_base_id,
-                self.embedder.provider_name(),
-                self.embedder.model(),
-                expected,
-            ) {
+            if let Some(points) = self
+                .vector_store
+                .current_points(
+                    *knowledge_base_id,
+                    self.embedder.provider_name(),
+                    self.embedder.model(),
+                    expected,
+                )
+                .await?
+            {
                 current_knowledge_bases.insert(*knowledge_base_id);
                 for point in points {
                     current_points
@@ -487,12 +505,14 @@ impl SearchEngine {
         }
         for (knowledge_base_id, points) in points_by_knowledge_base {
             if !current_knowledge_bases.contains(&knowledge_base_id) {
-                self.vector_store.replace_index(
-                    knowledge_base_id,
-                    self.embedder.provider_name(),
-                    self.embedder.model(),
-                    points,
-                )?;
+                self.vector_store
+                    .replace_index(
+                        knowledge_base_id,
+                        self.embedder.provider_name(),
+                        self.embedder.model(),
+                        points,
+                    )
+                    .await?;
             }
         }
         for document in documents.iter().filter(|document| !document.is_folder) {

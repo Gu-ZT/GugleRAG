@@ -378,6 +378,58 @@ label {
   background: var(--bad);
 }
 
+.zip-import-progress {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 91;
+  width: min(360px, calc(100vw - 36px));
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: var(--shadow-md);
+  padding: 13px 15px;
+}
+
+.zip-import-progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.zip-import-progress-header strong {
+  color: var(--accent-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.zip-import-progress-track {
+  height: 7px;
+  margin-top: 11px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--panel-sunken);
+}
+
+.zip-import-progress-fill {
+  display: block;
+  height: 100%;
+  min-width: 1%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.zip-import-progress p {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 @keyframes toast-in {
   from {
     opacity: 0;

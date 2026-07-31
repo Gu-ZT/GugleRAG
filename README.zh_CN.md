@@ -79,9 +79,9 @@ GugleRAG 是一个自托管团队知识库，提供 Markdown 文档、REST API�
 ```
 
 后端通过 SQLx 持久化用户、工作区、团队、成员关系、知识库、文档、版本、邀请和文档元数据。运行时配置接受 SQLite、MySQL 和
-PostgreSQL 的 `DATABASE_URL`。活动向量检索使用 Rust 内嵌的 HNSW 索引：每个知识库在 `VECTOR_INDEX_PATH`（默认
-`data/vector-index`）下保存一个二进制索引文件，因此不需要额外部署向量数据库服务。旧版本的 SQL 向量表会作为迁移来源保留，
-向量成功重建到 HNSW 后会被清理。SQL 仍是文档内容和权限的事实来源，HNSW 是可重建的派生索引。
+PostgreSQL 的 `DATABASE_URL`。活动向量检索默认使用 Rust 内嵌的 HNSW 索引：每个知识库在 `VECTOR_INDEX_PATH`（默认
+`data/vector-index`）下保存一个二进制索引文件，因此不需要额外部署向量数据库服务。目标 PostgreSQL 安装 `pgvector` 扩展后，
+也可以通过独立的 `VECTOR_DATABASE_URL` 将向量存入 PostgreSQL。SQL 仍是文档内容和权限的事实来源，两种向量后端都是可重建的派生索引。
 
 ## 首次运行
 
@@ -103,6 +103,7 @@ npm run dev
 - SQLite、MySQL 或 PostgreSQL 的 `DATABASE_URL`
 - `JWT_SECRET`
 - 嵌入模型、完整的 SiliconFlow 调用地址与相关设置
+- 可选的 PostgreSQL `pgvector` 向量数据库连接串
 - 可选的重排器设置
 - MCP 启用状态与认证要求
 - 反向代理部署可选的 `MCP_PUBLIC_URL`
@@ -242,17 +243,21 @@ ID 仍会按 MCP 作用域和知识库归属校验。搜索结果会包含 `work
 - `SILICONFLOW_URL=https://api.siliconflow.cn`
 - SiliconFlow 嵌入或重排使用 `SILICONFLOW_API_KEY=sk-...`
 - `VECTOR_INDEX_PATH=data/vector-index`
+- `VECTOR_DATABASE_URL=postgresql://user:password@127.0.0.1:5432/vectors`（可选）
 
 初始化向导默认选择 SiliconFlow 与 `BAAI/bge-m3`。默认嵌入请求地址是完整的
 `https://api.siliconflow.cn/v1/embeddings`；`SILICONFLOW_URL` 仍是用于推导重排地址的 API 根地址。`local`
 提供方会把 `EMBEDDING_URL` 作为 OpenAI 兼容 HTTP 嵌入端点调用。`stub` 是确定性离线提供方，用于测试或暂时不接入模型服务的部署。
 
+`VECTOR_DATABASE_URL` 留空时使用内嵌 HNSW；填写后，目标 PostgreSQL 必须提供 `vector` 扩展，GugleRAG 会在首次使用时创建向量表、过滤索引和适用的 HNSW 索引。它与
+`DATABASE_URL` 相互独立，因此文档元数据和向量可以存放在不同数据库中。
+
 每个非文件夹文档都会保留标题和标签作为上下文，并根据已配置模型的输入上限使用保守的字符窗口切分正文：512 token 的 BGE-large/BCE
 模型使用 384 字符，8,192 token 的 BGE-M3 模型使用 6,144 字符，32,768 token 的 Qwen3-Embedding 模型使用 8,192 字符，其他模型使用
-4,000 字符回退值；文本块之间保留少量重叠。文本块向量、文本、内容哈希、提供方和模型会保存到对应知识库的 HNSW 文件。只要文档集合、文本块
-哈希以及提供方、模型没有变化，后续搜索就会复用已有索引；否则会重建索引。搜索按命中的最高分文本块为文档排序，可选重排服务也接收最佳匹配
-文本块。服务启动时会补建缺失或过期索引；首次搜索也会按需建立索引。旧版本 SQL 向量会在可以匹配当前单块布局时自动迁移，不匹配时重新生成，
-不需要单独导出数据。
+4,000 字符回退值；文本块之间保留少量重叠。文本块向量、文本、内容哈希、提供方和模型会保存到所选后端。只要文档集合、文本块哈希以及提供方、
+模型没有变化，后续搜索就会复用已有索引或 PostgreSQL 记录；否则会重建对应知识库。搜索按命中的最高分文本块为文档排序，可选重排服务也接收最佳匹配
+文本块。服务启动时会补建缺失或过期索引；首次搜索也会按需建立索引。旧版本 SQL 向量会在可以匹配当前单块布局时自动迁移到所选后端，不匹配时重新生成，
+不需要单独导出数据。超过 pgvector HNSW 维度上限的模型仍可使用 PostgreSQL 精确向量检索。
 
 重排功能为可选项，由以下配置控制：
 

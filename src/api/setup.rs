@@ -24,6 +24,10 @@ pub(crate) async fn health(State(state): State<AppState>) -> Json<Value> {
             "url": state.config.embedding_url,
             "siliconflow_url": state.config.siliconflow_url
         },
+        "vector_store": {
+            "backend": state.config.vector_store_name(),
+            "database_url": state.config.vector_database_redacted_url()
+        },
         "reranker": {
             "enabled": state.config.reranker_enabled,
             "provider": state.config.reranker_provider,
@@ -52,6 +56,7 @@ pub(crate) async fn setup_status(State(state): State<AppState>) -> Json<Value> {
             "embedding_model": state.config.embedding_model,
             "embedding_url": state.config.embedding_url,
             "vector_index_path": state.config.vector_index_path,
+            "vector_database_url": state.config.vector_database_redacted_url().unwrap_or_default(),
             "reranker_enabled": state.config.reranker_enabled,
             "reranker_provider": state.config.reranker_provider,
             "reranker_model": state.config.reranker_model,

@@ -4,7 +4,10 @@ use axum::{
     http::{Request, StatusCode},
 };
 use serde_json::{Value, json};
-use std::io::{Cursor, Write};
+use std::{
+    io::{Cursor, Write},
+    time::Duration,
+};
 use tower::util::ServiceExt;
 use uuid::Uuid;
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
@@ -192,7 +195,10 @@ async fn zip_import_preserves_folders_and_skips_binary_and_unsafe_entries() {
         archive,
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{import}");
+    assert_eq!(status, StatusCode::ACCEPTED, "{import}");
+    assert_eq!(import["status"], "queued");
+    let job_id = import["job_id"].as_str().unwrap();
+    let import = wait_for_zip_import(&app, &token, &knowledge_base_id, job_id).await;
     assert_eq!(import["imported_files"], 2);
     assert_eq!(import["created_folders"], 2);
     assert_eq!(import["skipped_entries"], 2);
@@ -239,6 +245,31 @@ async fn zip_import_requires_knowledge_base_access() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+async fn wait_for_zip_import(
+    app: &Router,
+    token: &str,
+    knowledge_base_id: &str,
+    job_id: &str,
+) -> Value {
+    for _ in 0..200 {
+        let (status, response) = json_request(
+            app,
+            "GET",
+            &format!("/api/knowledge-bases/{knowledge_base_id}/import-zip/{job_id}"),
+            Some(token),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+        match response["status"].as_str() {
+            Some("completed") => return response,
+            Some("failed") => panic!("ZIP import failed: {response}"),
+            _ => tokio::time::sleep(Duration::from_millis(10)).await,
+        }
+    }
+    panic!("ZIP import did not complete within the test timeout");
 }
 
 fn zip_with_text_tree() -> Vec<u8> {
