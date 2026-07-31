@@ -8,6 +8,8 @@ All notable changes to GugleRAG are documented in this file.
 - Added SiliconFlow and local OpenAI-compatible embedding providers, with the complete default endpoint `https://api.siliconflow.cn/v1/embeddings`.
 - Added optional SiliconFlow, local, and custom HTTP reranking providers.
 - Added automatic startup and first-search indexing for documents created before this version, plus content-hash invalidation after edits.
+- Added independent, expiring MCP access tokens with workspace scopes, listing, and revocation.
+- Changed copied MCP configurations to the `http` type so clients can send `Authorization` headers.
 - Updated the setup and administrator retrieval settings, integration coverage, and retrieval documentation.
 
 ## [0.1.1] - 2026-07-31

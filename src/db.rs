@@ -44,6 +44,19 @@ pub(crate) struct DocumentEmbedding {
     pub(crate) vector: Vec<f32>,
 }
 
+#[derive(Clone)]
+pub(crate) struct McpTokenRecord {
+    pub(crate) id: Uuid,
+    pub(crate) user_id: Uuid,
+    pub(crate) token_prefix: String,
+    pub(crate) scope: String,
+    pub(crate) workspace_id: Option<Uuid>,
+    pub(crate) workspace_name: Option<String>,
+    pub(crate) expires_at: DateTime<Utc>,
+    pub(crate) revoked_at: Option<DateTime<Utc>>,
+    pub(crate) created_at: DateTime<Utc>,
+}
+
 impl Database {
     pub async fn connect(url: &str) -> Result<Self, AppError> {
         let dialect = if url.starts_with("postgres://") || url.starts_with("postgresql://") {
@@ -138,6 +151,22 @@ impl Database {
                 invitee_id VARCHAR(36) NOT NULL,
                 token_hash VARCHAR(128) NOT NULL UNIQUE,
                 status VARCHAR(16) NOT NULL,
+                created_at VARCHAR(40) NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+        db_query!(
+            self,
+            "CREATE TABLE IF NOT EXISTS mcp_tokens (
+                id VARCHAR(36) PRIMARY KEY,
+                user_id VARCHAR(36) NOT NULL,
+                token_hash VARCHAR(128) NOT NULL UNIQUE,
+                token_prefix VARCHAR(32) NOT NULL,
+                scope VARCHAR(16) NOT NULL,
+                workspace_id VARCHAR(36),
+                expires_at VARCHAR(40) NOT NULL,
+                revoked_at VARCHAR(40),
                 created_at VARCHAR(40) NOT NULL
             )",
         )
@@ -439,10 +468,122 @@ impl Database {
             .bind(user_id.to_string())
             .execute(&self.pool)
             .await?;
+        db_query!(self, "DELETE FROM mcp_tokens WHERE user_id = ?")
+            .bind(user_id.to_string())
+            .execute(&self.pool)
+            .await?;
         db_query!(self, "DELETE FROM app_users WHERE id = ?")
             .bind(user_id.to_string())
             .execute(&self.pool)
             .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn create_mcp_token(
+        &self,
+        user_id: Uuid,
+        token_hash: &str,
+        token_prefix: &str,
+        scope: &str,
+        workspace_id: Option<Uuid>,
+        expires_at: DateTime<Utc>,
+    ) -> Result<McpTokenRecord, AppError> {
+        let id = Uuid::new_v4();
+        let created_at = Utc::now();
+        db_query!(
+            self,
+            "INSERT INTO mcp_tokens
+             (id, user_id, token_hash, token_prefix, scope, workspace_id, expires_at, revoked_at, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)",
+        )
+            .bind(id.to_string())
+            .bind(user_id.to_string())
+            .bind(token_hash)
+            .bind(token_prefix)
+            .bind(scope)
+            .bind(workspace_id.map(|value| value.to_string()))
+            .bind(expires_at.to_rfc3339())
+            .bind(created_at.to_rfc3339())
+            .execute(&self.pool)
+            .await?;
+        let workspace_name = match workspace_id {
+            Some(workspace_id) => self
+                .get_workspace(workspace_id)
+                .await?
+                .map(|workspace| workspace.name),
+            None => None,
+        };
+        Ok(McpTokenRecord {
+            id,
+            user_id,
+            token_prefix: token_prefix.to_string(),
+            scope: scope.to_string(),
+            workspace_id,
+            workspace_name,
+            expires_at,
+            revoked_at: None,
+            created_at,
+        })
+    }
+
+    pub(crate) async fn list_mcp_tokens(
+        &self,
+        user_id: Uuid,
+    ) -> Result<Vec<McpTokenRecord>, AppError> {
+        let rows = db_query!(
+            self,
+            "SELECT t.id, t.user_id, t.token_prefix, t.scope, t.workspace_id,
+                    w.name AS workspace_name, t.expires_at, t.revoked_at, t.created_at
+             FROM mcp_tokens t LEFT JOIN workspaces w ON w.id = t.workspace_id
+             WHERE t.user_id = ? ORDER BY t.created_at DESC",
+        )
+        .bind(user_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_mcp_token).collect()
+    }
+
+    pub(crate) async fn find_mcp_token(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<McpTokenRecord>, AppError> {
+        db_query!(
+            self,
+            "SELECT t.id, t.user_id, t.token_prefix, t.scope, t.workspace_id,
+                    w.name AS workspace_name, t.expires_at, t.revoked_at, t.created_at
+             FROM mcp_tokens t LEFT JOIN workspaces w ON w.id = t.workspace_id
+             WHERE t.token_hash = ?",
+        )
+        .bind(token_hash)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(row_to_mcp_token)
+        .transpose()
+    }
+
+    pub(crate) async fn revoke_mcp_token(
+        &self,
+        user_id: Uuid,
+        token_id: Uuid,
+    ) -> Result<(), AppError> {
+        let token = self
+            .list_mcp_tokens(user_id)
+            .await?
+            .into_iter()
+            .find(|token| token.id == token_id)
+            .ok_or_else(|| AppError::NotFound("MCP token not found".to_string()))?;
+        if token.revoked_at.is_some() {
+            return Ok(());
+        }
+        db_query!(
+            self,
+            "UPDATE mcp_tokens SET revoked_at = ? WHERE id = ? AND user_id = ?",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .bind(token_id.to_string())
+        .bind(user_id.to_string())
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -1321,6 +1462,26 @@ fn row_to_document_embedding(row: sqlx::any::AnyRow) -> Result<DocumentEmbedding
         provider: row.try_get("provider")?,
         model: row.try_get("model")?,
         vector,
+    })
+}
+
+fn row_to_mcp_token(row: sqlx::any::AnyRow) -> Result<McpTokenRecord, AppError> {
+    Ok(McpTokenRecord {
+        id: parse_uuid_str(row.try_get::<String, _>("id")?)?,
+        user_id: parse_uuid_str(row.try_get::<String, _>("user_id")?)?,
+        token_prefix: row.try_get("token_prefix")?,
+        scope: row.try_get("scope")?,
+        workspace_id: row
+            .try_get::<Option<String>, _>("workspace_id")?
+            .map(parse_uuid_str)
+            .transpose()?,
+        workspace_name: row.try_get("workspace_name")?,
+        expires_at: parse_datetime_str(row.try_get("expires_at")?)?,
+        revoked_at: row
+            .try_get::<Option<String>, _>("revoked_at")?
+            .map(parse_datetime_str)
+            .transpose()?,
+        created_at: parse_datetime_str(row.try_get("created_at")?)?,
     })
 }
 

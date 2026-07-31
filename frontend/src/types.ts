@@ -210,9 +210,20 @@ export interface InvitationResponse {
 }
 
 export interface McpConfig {
-  type: "streamable-http";
+  type: "http";
   url: string;
   headers: {
     Authorization: string;
   };
+}
+
+export interface McpToken {
+  id: string;
+  token_prefix: string;
+  scope: "user" | "group" | "all";
+  workspace_id: string | null;
+  workspace_name: string | null;
+  expires_at: string;
+  revoked_at: string | null;
+  created_at: string;
 }

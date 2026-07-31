@@ -60,6 +60,11 @@ pub(crate) fn router() -> Router<AppState> {
             post(collaboration::accept_invitation),
         )
         .route("/api/mcp/configs", post(collaboration::create_mcp_config))
+        .route("/api/mcp/tokens", get(collaboration::list_mcp_tokens))
+        .route(
+            "/api/mcp/tokens/{token_id}",
+            delete(collaboration::revoke_mcp_token),
+        )
         .route(
             "/api/knowledge-bases/{knowledge_base_id}",
             delete(collaboration::delete_knowledge_base),

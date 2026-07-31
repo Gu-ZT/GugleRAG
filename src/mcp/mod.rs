@@ -1,6 +1,7 @@
 use crate::{
     AppState,
     auth::{self, hash_password},
+    db::McpTokenRecord,
     domain::{Document, DocumentVersion, KnowledgeBase, Role, User, Workspace, WorkspaceKind},
     error::AppError,
 };
@@ -20,6 +21,26 @@ struct McpScope {
     knowledge_bases: Vec<KnowledgeBase>,
 }
 
+#[derive(Clone, Copy)]
+enum McpWorkspaceScope {
+    User,
+    Group,
+}
+
+#[derive(Clone, Copy)]
+enum McpAccess {
+    All,
+    Workspace {
+        scope: McpWorkspaceScope,
+        workspace_id: Uuid,
+    },
+}
+
+struct McpIdentity {
+    user_id: Uuid,
+    access: Option<McpAccess>,
+}
+
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/mcp", post(mcp_endpoint))
@@ -36,20 +57,19 @@ async fn mcp_endpoint(
     if !state.config.mcp_enabled {
         return Json(json_rpc_error(id, -32000, "MCP endpoint disabled"));
     }
-    let user_id = match auth::require_user(&headers, &state).await {
-        Ok(user_id) => Some(user_id),
-        Err(_) if state.config.mcp_auth_required => {
-            return Json(json_rpc_error(id, -32001, "authentication required"));
-        }
-        Err(_) => None,
+    let identity = match authenticate_mcp(&headers, &state).await {
+        Ok(identity) => Some(identity),
+        Err(_) if !state.config.mcp_auth_required && !headers.contains_key("authorization") => None,
+        Err(error) => return Json(json_rpc_error(id, -32001, &error.to_string())),
     };
-    let scope = match user_id {
-        Some(user_id) => match mcp_scope_for_user(&state, user_id).await {
+    let scope = match identity.as_ref() {
+        Some(identity) => match mcp_scope_for_identity(&state, identity).await {
             Ok(scope) => Some(scope),
             Err(error) => return Json(json_rpc_error(id, -32000, &error.to_string())),
         },
         None => None,
     };
+    let user_id = identity.as_ref().map(|identity| identity.user_id);
     mcp_response(&state, request, user_id, scope.as_ref()).await
 }
 
@@ -62,15 +82,22 @@ async fn all_workspaces_mcp_endpoint(
     if !state.config.mcp_enabled {
         return Json(json_rpc_error(id, -32000, "MCP endpoint disabled"));
     }
-    let user_id = match auth::require_user(&headers, &state).await {
-        Ok(user_id) => user_id,
+    let identity = match authenticate_mcp(&headers, &state).await {
+        Ok(identity) => identity,
         Err(error) => return Json(json_rpc_error(id, -32001, &error.to_string())),
     };
-    let scope = match mcp_scope_for_user(&state, user_id).await {
+    if matches!(identity.access, Some(McpAccess::Workspace { .. })) {
+        return Json(json_rpc_error(
+            id,
+            -32001,
+            "MCP token scope does not allow all workspaces",
+        ));
+    }
+    let scope = match mcp_scope_for_user(&state, identity.user_id).await {
         Ok(scope) => scope,
         Err(error) => return Json(json_rpc_error(id, -32001, &error.to_string())),
     };
-    mcp_response(&state, request, Some(user_id), Some(&scope)).await
+    mcp_response(&state, request, Some(identity.user_id), Some(&scope)).await
 }
 
 async fn workspace_mcp_endpoint(
@@ -83,15 +110,106 @@ async fn workspace_mcp_endpoint(
     if !state.config.mcp_enabled {
         return Json(json_rpc_error(id, -32000, "MCP endpoint disabled"));
     }
-    let user_id = match auth::require_user(&headers, &state).await {
-        Ok(user_id) => user_id,
+    let identity = match authenticate_mcp(&headers, &state).await {
+        Ok(identity) => identity,
         Err(error) => return Json(json_rpc_error(id, -32001, &error.to_string())),
     };
-    let scope = match mcp_scope_for_workspace(&state, user_id, &scope_name, workspace_id).await {
-        Ok(scope) => scope,
-        Err(error) => return Json(json_rpc_error(id, -32001, &error.to_string())),
-    };
-    mcp_response(&state, request, Some(user_id), Some(&scope)).await
+    if !mcp_access_allows_workspace(identity.access, &scope_name, workspace_id) {
+        return Json(json_rpc_error(
+            id,
+            -32001,
+            "MCP token scope does not allow this workspace",
+        ));
+    }
+    let scope =
+        match mcp_scope_for_workspace(&state, identity.user_id, &scope_name, workspace_id).await {
+            Ok(scope) => scope,
+            Err(error) => return Json(json_rpc_error(id, -32001, &error.to_string())),
+        };
+    mcp_response(&state, request, Some(identity.user_id), Some(&scope)).await
+}
+
+async fn authenticate_mcp(headers: &HeaderMap, state: &AppState) -> Result<McpIdentity, AppError> {
+    let raw_token = auth::bearer_token(headers)?;
+    if let Ok(user_id) = auth::require_user(headers, state).await
+        && state.database.get_user(user_id).await?.is_some()
+    {
+        return Ok(McpIdentity {
+            user_id,
+            access: None,
+        });
+    }
+    let token = state
+        .database
+        .find_mcp_token(&auth::hash_access_token(raw_token))
+        .await?
+        .ok_or_else(|| AppError::Unauthorized("invalid MCP token".to_string()))?;
+    if token.revoked_at.is_some() || token.expires_at <= Utc::now() {
+        return Err(AppError::Unauthorized(
+            "MCP token has expired or been revoked".to_string(),
+        ));
+    }
+    if state.database.get_user(token.user_id).await?.is_none() {
+        return Err(AppError::Unauthorized(
+            "MCP token owner not found".to_string(),
+        ));
+    }
+    Ok(McpIdentity {
+        user_id: token.user_id,
+        access: Some(mcp_access_from_token(&token)?),
+    })
+}
+
+fn mcp_access_from_token(token: &McpTokenRecord) -> Result<McpAccess, AppError> {
+    match (token.scope.as_str(), token.workspace_id) {
+        ("all", None) => Ok(McpAccess::All),
+        ("user", Some(workspace_id)) => Ok(McpAccess::Workspace {
+            scope: McpWorkspaceScope::User,
+            workspace_id,
+        }),
+        ("group", Some(workspace_id)) => Ok(McpAccess::Workspace {
+            scope: McpWorkspaceScope::Group,
+            workspace_id,
+        }),
+        _ => Err(AppError::Unauthorized(
+            "invalid MCP token scope".to_string(),
+        )),
+    }
+}
+
+async fn mcp_scope_for_identity(
+    state: &AppState,
+    identity: &McpIdentity,
+) -> Result<McpScope, AppError> {
+    match identity.access {
+        None | Some(McpAccess::All) => mcp_scope_for_user(state, identity.user_id).await,
+        Some(McpAccess::Workspace {
+            scope: McpWorkspaceScope::User,
+            workspace_id,
+        }) => mcp_scope_for_workspace(state, identity.user_id, "user", workspace_id).await,
+        Some(McpAccess::Workspace {
+            scope: McpWorkspaceScope::Group,
+            workspace_id,
+        }) => mcp_scope_for_workspace(state, identity.user_id, "group", workspace_id).await,
+    }
+}
+
+fn mcp_access_allows_workspace(
+    access: Option<McpAccess>,
+    scope_name: &str,
+    workspace_id: Uuid,
+) -> bool {
+    match access {
+        None | Some(McpAccess::All) => true,
+        Some(McpAccess::Workspace {
+            scope: McpWorkspaceScope::User,
+            workspace_id: allowed_workspace_id,
+        }) => scope_name == "user" && workspace_id == allowed_workspace_id,
+        Some(McpAccess::Workspace {
+            scope: McpWorkspaceScope::Group,
+            workspace_id: allowed_workspace_id,
+        }) => scope_name == "group" && workspace_id == allowed_workspace_id,
+    }
 }
 
 async fn mcp_response(

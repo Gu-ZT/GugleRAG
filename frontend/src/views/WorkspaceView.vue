@@ -32,6 +32,7 @@ import type {
   InvitationResponse,
   KnowledgeBase,
   McpConfig,
+  McpToken,
   PublicUser,
   RegistrationStatus,
   Team,
@@ -40,6 +41,8 @@ import type {
   Workspace,
   ZipImportResult
 } from "../types";
+
+type McpScope = "user" | "group" | "all";
 
 const activeDoc = ref<DocumentItem | null>(null);
 const token = ref(localStorage.getItem("guglerag.token") ?? "");
@@ -50,7 +53,9 @@ const editorMode = ref<"edit" | "preview">("edit");
 const sidebarOpen = ref(false);
 const workspaceMenuOpen = ref(false);
 const adminSettingsOpen = ref(false);
-const activeDialog = ref<"create-team" | "invite-member" | "join-team" | "create-knowledge-base" | "create-folder" | "mcp" | null>(null);
+const activeDialog = ref<
+  "create-team" | "invite-member" | "join-team" | "create-knowledge-base" | "create-folder" | "mcp" | "mcp-expiry" | null
+>(null);
 const query = ref("");
 const authError = ref("");
 
@@ -67,6 +72,9 @@ const invitations = ref<TeamInvitation[]>([]);
 const selectedWorkspaceId = ref("");
 const selectedKnowledgeBaseId = ref("");
 const mcpConfig = ref("");
+const mcpTokens = ref<McpToken[]>([]);
+const mcpConfigScope = ref<McpScope | null>(null);
+const mcpExpiryDays = ref(30);
 const lastInviteToken = ref("");
 
 const authForm = reactive({ username: "", password: "", display_name: "" });
@@ -225,6 +233,35 @@ function formatTime(iso: string): string {
   if (diff < day) return `${Math.floor(diff / hour)} 小时前`;
   if (diff < 7 * day) return `${Math.floor(diff / day)} 天前`;
   return date.toLocaleDateString();
+}
+
+function formatDateTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "未知";
+  return date.toLocaleString("zh-CN", { dateStyle: "medium", timeStyle: "short" });
+}
+
+function mcpTokenStatus(item: McpToken): "active" | "expired" | "revoked" {
+  if (item.revoked_at) return "revoked";
+  return new Date(item.expires_at).getTime() <= Date.now() ? "expired" : "active";
+}
+
+function mcpTokenStatusLabel(item: McpToken): string {
+  const status = mcpTokenStatus(item);
+  if (status === "revoked") return "已弃用";
+  if (status === "expired") return "已过期";
+  return "有效";
+}
+
+function mcpScopeLabel(scope: McpScope | null, workspaceName?: string | null): string {
+  if (scope === "all") return "全部可用工作区";
+  if (scope === "group") return workspaceName ? `团队：${workspaceName}` : "团队工作区";
+  if (scope === "user") return workspaceName ? `个人：${workspaceName}` : "个人工作区";
+  return "当前范围";
+}
+
+function mcpTokenScopeLabel(item: McpToken): string {
+  return mcpScopeLabel(item.scope, item.workspace_name);
 }
 
 function errorMessage(err: unknown, fallback: string): string {
@@ -734,6 +771,20 @@ async function acceptInvitation() {
   }
 }
 
+async function loadMcpTokens() {
+  try {
+    mcpTokens.value = await request<McpToken[]>("/api/mcp/tokens", { headers: authHeaders() });
+  } catch (err) {
+    toast("error", errorMessage(err, "加载 MCP 令牌失败"));
+  }
+}
+
+function chooseMcpScope(scope: "user" | "group" | "all") {
+  mcpConfigScope.value = scope;
+  mcpExpiryDays.value = 30;
+  activeDialog.value = "mcp-expiry";
+}
+
 async function createMcpConfig(scope: "user" | "group" | "all") {
   try {
     let workspaceId: string | undefined;
@@ -749,13 +800,35 @@ async function createMcpConfig(scope: "user" | "group" | "all") {
     const config = await request<McpConfig>("/api/mcp/configs", {
       method: "POST",
       headers: authHeaders(),
-      body: JSON.stringify({ scope, workspace_id: workspaceId })
+      body: JSON.stringify({ scope, workspace_id: workspaceId, expires_in_days: mcpExpiryDays.value })
     });
     mcpConfig.value = JSON.stringify(config, null, 2);
     await copyText(mcpConfig.value);
+    await loadMcpTokens();
+    mcpConfigScope.value = null;
+    activeDialog.value = "mcp";
     toast("success", "MCP 配置已复制。");
   } catch (err) {
     toast("error", errorMessage(err, "生成 MCP 配置失败"));
+  }
+}
+
+async function confirmMcpConfig() {
+  if (mcpConfigScope.value) await createMcpConfig(mcpConfigScope.value);
+}
+
+async function revokeMcpToken(item: McpToken) {
+  if (mcpTokenStatus(item) === "revoked") return;
+  if (!window.confirm(`确定弃用令牌 ${item.token_prefix}... 吗？弃用后无法恢复。`)) return;
+  try {
+    await request<void>(`/api/mcp/tokens/${item.id}`, {
+      method: "DELETE",
+      headers: authHeaders()
+    });
+    await loadMcpTokens();
+    toast("success", "MCP 令牌已弃用。");
+  } catch (err) {
+    toast("error", errorMessage(err, "弃用 MCP 令牌失败"));
   }
 }
 
@@ -788,10 +861,13 @@ function openDialog(dialog: NonNullable<typeof activeDialog.value>) {
   workspaceMenuOpen.value = false;
   lastInviteToken.value = "";
   mcpConfig.value = "";
+  mcpConfigScope.value = null;
   activeDialog.value = dialog;
+  if (dialog === "mcp") void loadMcpTokens();
 }
 
 function closeDialog() {
+  mcpConfigScope.value = null;
   activeDialog.value = null;
 }
 
@@ -1170,6 +1246,7 @@ onUnmounted(() => {
             <h2 v-else-if="activeDialog === 'join-team'">加入团队</h2>
             <h2 v-else-if="activeDialog === 'create-knowledge-base'">新建知识库</h2>
             <h2 v-else-if="activeDialog === 'create-folder'">新建目录</h2>
+            <h2 v-else-if="activeDialog === 'mcp-expiry'">生成 MCP 配置</h2>
             <h2 v-else>MCP 配置</h2>
           </div>
           <button class="dialog-close" title="关闭" aria-label="关闭" @click="closeDialog"><X :size="18" /></button>
@@ -1229,17 +1306,68 @@ onUnmounted(() => {
           </footer>
         </form>
 
+        <form v-else-if="activeDialog === 'mcp-expiry'" class="dialog-form" @submit.prevent="confirmMcpConfig">
+          <label>
+            令牌有效期
+            <select v-model.number="mcpExpiryDays" autofocus>
+              <option :value="7">7 天</option>
+              <option :value="30">30 天</option>
+              <option :value="90">90 天</option>
+              <option :value="180">180 天</option>
+              <option :value="365">1 年</option>
+              <option :value="1095">3 年</option>
+            </select>
+          </label>
+          <p class="hint">将为“{{ mcpScopeLabel(mcpConfigScope) }}”创建独立 MCP 令牌，令牌不会复用登录凭据。</p>
+          <footer class="dialog-actions">
+            <button type="button" class="btn btn-ghost" @click="activeDialog = 'mcp'">返回</button>
+            <button class="btn btn-primary"><Plug :size="16" />生成并复制</button>
+          </footer>
+        </form>
+
         <div v-else class="mcp-panel">
-          <button class="mcp-scope" @click="createMcpConfig('user')">
+          <button type="button" class="mcp-scope" @click="chooseMcpScope('user')">
             <span><strong>个人工作区</strong><small>仅访问你的个人知识库</small></span><Copy :size="16" />
           </button>
-          <button v-if="selectedTeam" class="mcp-scope" @click="createMcpConfig('group')">
+          <button v-if="selectedTeam" type="button" class="mcp-scope" @click="chooseMcpScope('group')">
             <span><strong>{{ selectedTeam.name }}</strong><small>访问当前团队工作区的知识库</small></span><Copy :size="16" />
           </button>
-          <button class="mcp-scope" @click="createMcpConfig('all')">
+          <button type="button" class="mcp-scope" @click="chooseMcpScope('all')">
             <span><strong>全部可用工作区</strong><small>访问个人与所有已加入团队的知识库</small></span><Copy :size="16" />
           </button>
           <pre v-if="mcpConfig" class="code-block">{{ mcpConfig }}</pre>
+          <section class="mcp-token-section">
+            <header class="mcp-section-header">
+              <div>
+                <h3>已有访问令牌</h3>
+                <p>令牌只显示前缀；生成配置后请妥善保存复制出的配置。</p>
+              </div>
+            </header>
+            <div v-if="mcpTokens.length" class="mcp-token-list">
+              <article v-for="item in mcpTokens" :key="item.id" class="mcp-token-row">
+                <div class="mcp-token-main">
+                  <code>{{ item.token_prefix }}...</code>
+                  <span class="mcp-token-status" :class="mcpTokenStatus(item)">{{ mcpTokenStatusLabel(item) }}</span>
+                </div>
+                <div class="mcp-token-meta">
+                  <span>{{ mcpTokenScopeLabel(item) }}</span>
+                  <span v-if="item.revoked_at">弃用于 {{ formatDateTime(item.revoked_at) }}</span>
+                  <span v-else>有效至 {{ formatDateTime(item.expires_at) }}</span>
+                </div>
+                <button
+                  v-if="mcpTokenStatus(item) === 'active'"
+                  type="button"
+                  class="rail-icon-btn mcp-token-revoke"
+                  title="弃用令牌"
+                  aria-label="弃用令牌"
+                  @click="revokeMcpToken(item)"
+                >
+                  <Trash2 :size="15" />
+                </button>
+              </article>
+            </div>
+            <p v-else class="mcp-token-empty">还没有 MCP 令牌。点击上面的范围来生成配置。</p>
+          </section>
         </div>
       </section>
     </div>

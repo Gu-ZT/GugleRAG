@@ -159,6 +159,8 @@ Useful endpoints:
 - `POST /api/teams/{team_id}/invitations`
 - `GET /api/invitations`
 - `POST /api/invitations/{token}/accept`
+- `GET /api/mcp/tokens`
+- `DELETE /api/mcp/tokens/{token_id}`
 - `GET/POST /api/documents`
 - `GET/PUT/DELETE /api/documents/{id}`
 - `GET /api/search?q=...`
@@ -180,33 +182,37 @@ be created directly from that tree.
 Documents belong to a knowledge base. Document and search requests accept `knowledge_base_id`; when it is omitted, the
 personal default knowledge base is used for backward compatibility.
 
-The Vue workspace generates and copies stable MCP configurations through `POST /api/mcp/configs`. Personal and team
-configurations identify a workspace explicitly:
+The Vue workspace generates and copies MCP configurations through `POST /api/mcp/configs`. Each copy creates an
+independent, scoped MCP access token instead of embedding the current login JWT. Personal and team configurations
+identify a workspace explicitly:
 
 ```json
 {
   "scope": "user",
-  "workspace_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  "workspace_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "expires_in_days": 30
 }
 ```
 
 Use `scope: "group"` with a team `workspace_id`, or `scope: "all"` without `workspace_id` for every workspace the
-account can access. The response follows the requested streamable HTTP shape:
+account can access. `expires_in_days` is optional and defaults to 30 days. The response uses the HTTP configuration
+shape so clients can send the `Authorization` header:
 
 ```json
 {
-  "type": "streamable-http",
+  "type": "http",
   "url": "http://127.0.0.1:8080/mcp/user/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
   "headers": {
-    "Authorization": "Bearer eyJhbGciOiJIUzI1NiJ9..."
+    "Authorization": "Bearer ggr_..."
   }
 }
 ```
 
 The UUID at the end of a personal or group URL is the workspace ID, not an access token. The all-workspaces URL is
-`/mcp/all` and has no trailing ID. Authorization reuses the user's current login JWT, so copying the same configuration
-repeatedly does not create or rotate credentials. JWT expiry and logout behavior remain the same as the normal account
-session, and workspace access is checked again on every MCP request. Set `MCP_PUBLIC_URL` when the server is behind a
+`/mcp/all` and has no trailing ID. The generated opaque token is stored only as a hash and is independent of the
+login session. Every MCP request checks token expiry, revocation, the token's workspace scope, and current workspace
+membership. `GET /api/mcp/tokens` lists token prefixes and metadata without exposing full secrets;
+`DELETE /api/mcp/tokens/{token_id}` revokes one of the user's tokens. Set `MCP_PUBLIC_URL` when the server is behind a
 public hostname or reverse proxy.
 
 MCP clients can discover resources before operating on documents:

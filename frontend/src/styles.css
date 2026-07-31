@@ -1485,6 +1485,10 @@ label {
   width: 100%;
 }
 
+.dialog-form select {
+  width: 100%;
+}
+
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
@@ -1579,6 +1583,102 @@ label {
   font-size: 12px;
 }
 
+.mcp-token-section {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+
+.mcp-section-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mcp-section-header h3 {
+  color: var(--ink);
+  font-size: 13.5px;
+}
+
+.mcp-section-header p,
+.mcp-token-empty {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.mcp-token-list {
+  display: grid;
+  gap: 7px;
+}
+
+.mcp-token-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px 12px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 10px 10px 10px 12px;
+}
+
+.mcp-token-main,
+.mcp-token-meta {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+.mcp-token-main code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-token-status {
+  flex: none;
+  border-radius: 4px;
+  padding: 2px 5px;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.mcp-token-status.active {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.mcp-token-status.expired,
+.mcp-token-status.revoked {
+  background: var(--bad-soft);
+  color: var(--bad);
+}
+
+.mcp-token-meta {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 11.5px;
+  flex-wrap: wrap;
+}
+
+.mcp-token-meta span + span::before {
+  content: "·";
+  margin-right: 8px;
+  color: var(--faint);
+}
+
+.mcp-token-revoke {
+  grid-column: 2;
+  grid-row: 1;
+}
+
 .code-block {
   margin: 0;
   max-height: 220px;
@@ -1654,6 +1754,16 @@ label {
 .rail-icon-btn svg {
   width: 16px;
   height: 16px;
+}
+
+.mcp-token-row .mcp-token-revoke {
+  color: var(--bad);
+  padding: 5px;
+}
+
+.mcp-token-row .mcp-token-revoke:hover {
+  background: var(--bad-soft);
+  color: var(--bad);
 }
 
 /* ---------- 主区域 ---------- */

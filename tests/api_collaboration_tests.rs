@@ -291,17 +291,19 @@ async fn collaboration_and_scoped_mcp_flow_works() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(mcp["type"], "streamable-http");
+    assert_eq!(mcp["type"], "http");
     assert!(
         mcp["url"]
             .as_str()
             .unwrap()
             .ends_with(&format!("/mcp/group/{team_workspace_id}"))
     );
-    assert_eq!(
-        mcp["headers"]["Authorization"],
-        format!("Bearer {alice_token}")
-    );
+    let mcp_bearer = mcp["headers"]["Authorization"]
+        .as_str()
+        .unwrap()
+        .trim_start_matches("Bearer ");
+    assert!(mcp_bearer.starts_with("ggr_"));
+    assert_ne!(mcp_bearer, alice_token);
     let (status, repeated_mcp) = json_request(
         &app,
         "POST",
@@ -311,7 +313,12 @@ async fn collaboration_and_scoped_mcp_flow_works() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(repeated_mcp, mcp);
+    assert_eq!(repeated_mcp["type"], "http");
+    assert_eq!(repeated_mcp["url"], mcp["url"]);
+    assert_ne!(
+        repeated_mcp["headers"]["Authorization"],
+        mcp["headers"]["Authorization"]
+    );
 
     let (status, all_mcp) = json_request(
         &app,
@@ -323,16 +330,19 @@ async fn collaboration_and_scoped_mcp_flow_works() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(all_mcp["url"].as_str().unwrap().ends_with("/mcp/all"));
-    assert_eq!(
-        all_mcp["headers"]["Authorization"],
-        format!("Bearer {alice_token}")
-    );
+    let all_mcp_bearer = all_mcp["headers"]["Authorization"]
+        .as_str()
+        .unwrap()
+        .trim_start_matches("Bearer ")
+        .to_string();
+    assert!(all_mcp_bearer.starts_with("ggr_"));
+    assert_ne!(all_mcp_bearer, alice_token);
     let all_mcp_path = url_path(all_mcp["url"].as_str().unwrap());
     let (_, rpc) = json_request(
         &app,
         "POST",
         &all_mcp_path,
-        Some(&alice_token),
+        Some(&all_mcp_bearer),
         Some(json!({
             "jsonrpc": "2.0",
             "id": 7,
@@ -356,6 +366,26 @@ async fn collaboration_and_scoped_mcp_flow_works() {
             .unwrap()
             .iter()
             .any(|workspace| workspace["id"] == team_workspace_id)
+    );
+
+    let (_, denied_all_scope_rpc) = json_request(
+        &app,
+        "POST",
+        &all_mcp_path,
+        Some(mcp_bearer),
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 70,
+            "method": "tools/call",
+            "params": { "name": "list_workspaces", "arguments": {} }
+        })),
+    )
+    .await;
+    assert!(
+        denied_all_scope_rpc["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("does not allow all workspaces")
     );
 
     let (_, rpc) = json_request(
@@ -738,6 +768,46 @@ async fn collaboration_and_scoped_mcp_flow_works() {
             .as_str()
             .unwrap()
             .contains("does not belong")
+    );
+
+    let (status, mcp_tokens) =
+        json_request(&app, "GET", "/api/mcp/tokens", Some(&alice_token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let mcp_token_prefix = mcp_bearer.chars().take(12).collect::<String>();
+    let group_token = mcp_tokens
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["token_prefix"] == mcp_token_prefix)
+        .unwrap();
+    assert_eq!(group_token["scope"], "group");
+    assert_eq!(group_token["workspace_id"], team_workspace_id);
+    assert!(group_token["expires_at"].as_str().is_some());
+    assert!(group_token["revoked_at"].is_null());
+
+    let token_id = group_token["id"].as_str().unwrap();
+    let (status, _) = json_request(
+        &app,
+        "DELETE",
+        &format!("/api/mcp/tokens/{token_id}"),
+        Some(&alice_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, revoked_rpc) = json_request(
+        &app,
+        "POST",
+        &mcp_path,
+        Some(mcp_bearer),
+        Some(json!({ "jsonrpc": "2.0", "id": 99, "method": "tools/list" })),
+    )
+    .await;
+    assert!(
+        revoked_rpc["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("expired or been revoked")
     );
 }
 

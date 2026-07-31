@@ -156,6 +156,8 @@ Windows 文件名不允许使用冒号，因此 Windows 下归档文件使用 `l
 - `POST /api/teams/{team_id}/invitations`
 - `GET /api/invitations`
 - `POST /api/invitations/{token}/accept`
+- `GET /api/mcp/tokens`
+- `DELETE /api/mcp/tokens/{token_id}`
 - `GET/POST /api/documents`
 - `GET/PUT/DELETE /api/documents/{id}`
 - `GET /api/search?q=...`
@@ -173,31 +175,34 @@ Windows 文件名不允许使用冒号，因此 Windows 下归档文件使用 `l
 
 文档归属于知识库。文档和搜索请求接受 `knowledge_base_id`；省略时，为保持向后兼容，将使用个人默认知识库。
 
-Vue 工作区通过 `POST /api/mcp/configs` 生成并复制稳定的 MCP 配置。个人和团队配置会显式指定工作区：
+Vue 工作区通过 `POST /api/mcp/configs` 生成并复制 MCP 配置。每次复制都会创建一个独立且带范围限制的 MCP
+访问令牌，不会把当前登录 JWT 写入配置。个人和团队配置会显式指定工作区：
 
 ```json
 {
   "scope": "user",
-  "workspace_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  "workspace_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "expires_in_days": 30
 }
 ```
 
 团队工作区使用 `scope: "group"` 和团队 `workspace_id`；访问账户可用的全部工作区时，使用不带 `workspace_id` 的
-`scope: "all"`。响应遵循所请求的 streamable HTTP 格式：
+`scope: "all"`。`expires_in_days` 可选，默认有效期为 30 天。响应使用支持发送 `Authorization` 请求头的 HTTP 格式：
 
 ```json
 {
-  "type": "streamable-http",
+  "type": "http",
   "url": "http://127.0.0.1:8080/mcp/user/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
   "headers": {
-    "Authorization": "Bearer eyJhbGciOiJIUzI1NiJ9..."
+    "Authorization": "Bearer ggr_..."
   }
 }
 ```
 
-个人或团队 URL 末尾的 UUID 是工作区 ID，而不是访问令牌。全工作区 URL 为 `/mcp/all`，末尾没有 ID。认证复用用户当前登录的
-JWT，因此重复复制同一配置不会创建或轮换凭据。JWT 过期与退出登录行为和普通账户会话一致，并且每次 MCP
-请求都会重新检查工作区访问权限。服务位于公共域名或反向代理之后时，请设置 `MCP_PUBLIC_URL`。
+个人或团队 URL 末尾的 UUID 是工作区 ID，而不是访问令牌。全工作区 URL 为 `/mcp/all`，末尾没有 ID。生成的令牌只以哈希形式
+存储，并且独立于登录会话。每次 MCP 请求都会检查令牌有效期、弃用状态、令牌工作区范围和当前成员关系。
+`GET /api/mcp/tokens` 会列出令牌前缀及元数据，但不会暴露完整令牌；`DELETE /api/mcp/tokens/{token_id}` 可以弃用自己的令牌。
+服务位于公共域名或反向代理之后时，请设置 `MCP_PUBLIC_URL`。
 
 MCP 客户端可以在操作文档前发现资源：
 

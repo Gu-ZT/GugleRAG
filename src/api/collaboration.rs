@@ -1,5 +1,6 @@
 use crate::{
     AppState, auth,
+    db::McpTokenRecord,
     domain::{
         KnowledgeBase, Role, Team, TeamInvitation, TeamMember, TeamRole, Workspace, WorkspaceKind,
     },
@@ -10,9 +11,12 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
 };
-use chrono::Utc;
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+const DEFAULT_MCP_TOKEN_EXPIRY_DAYS: u32 = 30;
+const MAX_MCP_TOKEN_EXPIRY_DAYS: u32 = 3650;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct NameRequest {
@@ -41,6 +45,8 @@ pub(crate) struct InvitationResponse {
 pub(crate) struct McpConfigRequest {
     scope: String,
     workspace_id: Option<Uuid>,
+    #[serde(default = "default_mcp_token_expiry_days")]
+    expires_in_days: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -55,6 +61,37 @@ pub(crate) struct McpConfigResponse {
     config_type: &'static str,
     url: String,
     headers: McpHeaders,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct McpTokenResponse {
+    id: Uuid,
+    token_prefix: String,
+    scope: String,
+    workspace_id: Option<Uuid>,
+    workspace_name: Option<String>,
+    expires_at: DateTime<Utc>,
+    revoked_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+}
+
+impl From<McpTokenRecord> for McpTokenResponse {
+    fn from(token: McpTokenRecord) -> Self {
+        Self {
+            id: token.id,
+            token_prefix: token.token_prefix,
+            scope: token.scope,
+            workspace_id: token.workspace_id,
+            workspace_name: token.workspace_name,
+            expires_at: token.expires_at,
+            revoked_at: token.revoked_at,
+            created_at: token.created_at,
+        }
+    }
+}
+
+fn default_mcp_token_expiry_days() -> u32 {
+    DEFAULT_MCP_TOKEN_EXPIRY_DAYS
 }
 
 pub(crate) async fn list_workspaces(
@@ -230,7 +267,11 @@ pub(crate) async fn create_mcp_config(
     Json(input): Json<McpConfigRequest>,
 ) -> Result<Json<McpConfigResponse>, AppError> {
     let user_id = auth::require_user(&headers, &state).await?;
-    let login_token = auth::bearer_token(&headers)?;
+    if !(1..=MAX_MCP_TOKEN_EXPIRY_DAYS).contains(&input.expires_in_days) {
+        return Err(AppError::BadRequest(format!(
+            "expires_in_days must be between 1 and {MAX_MCP_TOKEN_EXPIRY_DAYS}"
+        )));
+    }
     let path = match input.scope.as_str() {
         "all" => {
             if input.workspace_id.is_some() {
@@ -267,14 +308,52 @@ pub(crate) async fn create_mcp_config(
             ));
         }
     };
+    let token = format!("ggr_{}", Uuid::new_v4().simple());
+    let token_prefix = token.chars().take(12).collect::<String>();
+    state
+        .database
+        .create_mcp_token(
+            user_id,
+            &auth::hash_access_token(&token),
+            &token_prefix,
+            &input.scope,
+            input.workspace_id,
+            Utc::now() + Duration::days(i64::from(input.expires_in_days)),
+        )
+        .await?;
     let base_url = mcp_base_url(&state);
     Ok(Json(McpConfigResponse {
-        config_type: "streamable-http",
+        config_type: "http",
         url: format!("{base_url}/{path}"),
         headers: McpHeaders {
-            authorization: format!("Bearer {login_token}"),
+            authorization: format!("Bearer {token}"),
         },
     }))
+}
+
+pub(crate) async fn list_mcp_tokens(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<McpTokenResponse>>, AppError> {
+    let user_id = auth::require_user(&headers, &state).await?;
+    let tokens = state
+        .database
+        .list_mcp_tokens(user_id)
+        .await?
+        .into_iter()
+        .map(McpTokenResponse::from)
+        .collect();
+    Ok(Json(tokens))
+}
+
+pub(crate) async fn revoke_mcp_token(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(token_id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let user_id = auth::require_user(&headers, &state).await?;
+    state.database.revoke_mcp_token(user_id, token_id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub(crate) async fn require_knowledge_base_access(
