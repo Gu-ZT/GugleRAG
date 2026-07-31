@@ -2,6 +2,10 @@
 
 All notable changes to GugleRAG are documented in this file.
 
+## [0.5.0] - 2026-07-31
+
+- Added Debian Bookworm Docker image validation for native Linux amd64 and arm64 runners, plus multi-architecture publishing to GitHub Container Registry.
+
 ## [0.4.0] - 2026-07-31
 
 - Added a Windows desktop-launch system tray with an active listener URL tooltip and a right-click graceful exit command.

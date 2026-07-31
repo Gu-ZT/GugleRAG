@@ -127,6 +127,23 @@ cargo run
 
 The backend serves `frontend/dist` as static files and falls back to `frontend/dist/index.html` for the Vue app.
 
+### Docker
+
+The release workflow builds a non-root Debian Bookworm image for `linux/amd64` and `linux/arm64`, then publishes a
+combined manifest to `ghcr.io/gu-zt/guglerag`. Main-branch builds receive `main`, `sha-<commit>`, and immutable
+`v<version>-dev.<run>` tags. Stable `v<version>` tags also publish `v<version>`, `<version>`, and `latest`.
+
+```bash
+docker run --rm -p 8080:8080 \
+  --env-file .env \
+  -v guglerag-data:/app/data \
+  -v guglerag-logs:/app/logs \
+  ghcr.io/gu-zt/guglerag:main
+```
+
+The image includes the frontend build, stores SQLite data and vector indexes under `/app/data`, and writes logs under
+`/app/logs`. GitHub Actions publishes it with the repository `GITHUB_TOKEN`; no additional registry secret is needed.
+
 ### Windows Desktop Launch
 
 Double-clicking `GugleRAG.exe` in Windows Explorer starts it without a console window. After the HTTP server has

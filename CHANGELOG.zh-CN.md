@@ -2,6 +2,10 @@
 
 GugleRAG 的重要变更记录在此文件中。
 
+## [0.5.0] - 2026-07-31
+
+- 添加基于 Debian Bookworm 的 Docker 镜像，并在原生 Linux amd64、arm64 Runner 上验证后发布多架构镜像到 GitHub Container Registry。
+
 ## [0.4.0] - 2026-07-31
 
 - 添加 Windows 桌面启动时的系统托盘，悬浮可查看实际监听 URL，右键菜单可优雅退出服务。

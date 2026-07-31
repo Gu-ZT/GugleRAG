@@ -90,6 +90,51 @@ jobs:
           --binary "${{ matrix.executable }}"
           --native
 
+  docker:
+    name: Container (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - name: Build Debian container image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          platforms: ${{ matrix.platform }}
+          push: false
+          tags: guglerag-ci:${{ matrix.arch }}
+          cache-from: type=gha,scope=container-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=container-${{ matrix.arch }}
+      - name: Smoke-test container image
+        shell: bash
+        run: |
+          docker run --detach --name guglerag-ci --publish 18080:8080 "guglerag-ci:${{ matrix.arch }}"
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error http://127.0.0.1:18080/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs guglerag-ci || true
+          exit 1
+      - name: Collect container logs
+        if: failure()
+        run: docker logs guglerag-ci || true
+      - name: Remove test container
+        if: always()
+        run: docker rm --force guglerag-ci || true
+
   integration:
     name: Server integration (linux-x86_64)
     runs-on: ubuntu-24.04

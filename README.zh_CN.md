@@ -123,6 +123,20 @@ cargo run
 
 后端将 `frontend/dist` 作为静态文件提供，并为 SPA 路由回退到 `frontend/dist/index.html`。
 
+### Docker
+
+发布工作流会为 `linux/amd64` 和 `linux/arm64` 构建非 root 的 Debian Bookworm 镜像，再将多架构清单发布到 `ghcr.io/gu-zt/guglerag`。`main` 分支构建使用 `main`、`sha-<commit>` 和不可变的 `v<version>-dev.<run>` 标签；稳定 `v<version>` 标签还会发布 `v<version>`、`<version>` 与 `latest`。
+
+```bash
+docker run --rm -p 8080:8080 \
+  --env-file .env \
+  -v guglerag-data:/app/data \
+  -v guglerag-logs:/app/logs \
+  ghcr.io/gu-zt/guglerag:main
+```
+
+镜像包含前端构建产物，SQLite 数据和向量索引保存在 `/app/data`，日志写入 `/app/logs`。GitHub Actions 使用仓库的 `GITHUB_TOKEN` 发布，无需额外的镜像仓库密钥。
+
 ### Windows 桌面启动
 
 在 Windows 资源管理器中双击 `GugleRAG.exe` 会以无命令行窗口的方式启动。HTTP 服务成功绑定监听地址后，GugleRAG 会创建系统托盘图标；鼠标悬浮时可查看实际监听 URL，右键菜单中的“退出 GugleRAG”会优雅停止服务。通过终端启动（包括 `cargo run`）时保留原有的控制台行为，不会创建托盘图标。
