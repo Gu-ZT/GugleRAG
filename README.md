@@ -65,6 +65,7 @@ agents.
 │   ├── auth.rs          # JWT, password hashing, and account validation
 │   ├── config.rs        # Runtime/setup configuration
 │   ├── db.rs            # SQLx persistence
+│   ├── desktop.rs        # Windows desktop-launch system tray
 │   ├── domain.rs        # Shared domain models
 │   ├── error.rs         # HTTP-aware application errors
 │   ├── embedding.rs     # Embedding provider clients
@@ -125,6 +126,13 @@ cargo run
 ```
 
 The backend serves `frontend/dist` as static files and falls back to `frontend/dist/index.html` for the Vue app.
+
+### Windows Desktop Launch
+
+Double-clicking `GugleRAG.exe` in Windows Explorer starts it without a console window. After the HTTP server has
+successfully bound its listener, GugleRAG creates a system-tray icon. Hovering over the icon shows the active listener
+URL, and the right-click menu's `Exit GugleRAG` command stops the server gracefully. Launching through a terminal,
+including `cargo run`, keeps the normal console-oriented behavior and does not create a tray icon.
 
 ## Backend
 

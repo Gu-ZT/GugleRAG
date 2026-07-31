@@ -64,6 +64,7 @@ GugleRAG 是一个自托管团队知识库，提供 Markdown 文档、REST API�
 │   ├── auth.rs          # JWT、密码哈希与账户验证
 │   ├── config.rs        # 运行时与初始化配置
 │   ├── db.rs            # SQLx 持久化
+│   ├── desktop.rs        # Windows 桌面启动时的系统托盘
 │   ├── domain.rs        # 共享领域模型
 │   ├── error.rs         # HTTP 感知的应用错误
 │   ├── embedding.rs     # 嵌入服务提供方客户端
@@ -121,6 +122,10 @@ cargo run
 ```
 
 后端将 `frontend/dist` 作为静态文件提供，并为 SPA 路由回退到 `frontend/dist/index.html`。
+
+### Windows 桌面启动
+
+在 Windows 资源管理器中双击 `GugleRAG.exe` 会以无命令行窗口的方式启动。HTTP 服务成功绑定监听地址后，GugleRAG 会创建系统托盘图标；鼠标悬浮时可查看实际监听 URL，右键菜单中的“退出 GugleRAG”会优雅停止服务。通过终端启动（包括 `cargo run`）时保留原有的控制台行为，不会创建托盘图标。
 
 ## 后端
 

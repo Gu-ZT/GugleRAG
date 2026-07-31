@@ -1,6 +1,6 @@
 [package]
 name = "GugleRAG"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 
 [lib]
@@ -28,3 +28,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tower = "0.5"
 uuid = { version = "1", features = ["v4", "serde"] }
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(windows)'.dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+tao = "0.35.3"
+tray-icon = "0.21.2"

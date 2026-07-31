@@ -2,6 +2,10 @@
 
 All notable changes to GugleRAG are documented in this file.
 
+## [0.4.0] - 2026-07-31
+
+- Added a Windows desktop-launch system tray with an active listener URL tooltip and a right-click graceful exit command.
+
 ## [0.3.0] - 2026-07-31
 
 - Replaced SQL JSON vector retrieval with embedded, knowledge-base-scoped Rust HNSW indexes that persist under `VECTOR_INDEX_PATH` and rebuild when stale.

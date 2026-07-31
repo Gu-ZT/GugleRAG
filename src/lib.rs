@@ -6,12 +6,14 @@ pub mod error;
 pub mod search;
 
 mod api;
+mod desktop;
 mod embedding;
 pub mod logging;
 mod mcp;
 mod reranker;
 mod vector_store;
 
+use crate::desktop::DesktopTray;
 use axum::Router;
 use std::{net::SocketAddr, path::Path, sync::Arc};
 use tokio::{net::TcpListener, sync::watch};
@@ -114,19 +116,23 @@ async fn build_test_router_from_config(config: config::Config) -> Result<Router,
 }
 
 pub async fn run() {
+    let desktop_launch = desktop::is_desktop_launch();
     let log_writer =
         logging::RollingLogWriter::new("logs").expect("failed to initialize logs/latest.log");
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| "gugle_rag=info,tower_http=info".into());
-    tracing_subscriber::registry()
-        .with(filter)
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_writer(log_writer)
-                .with_ansi(false),
-        )
-        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stdout))
-        .init();
+    let subscriber = tracing_subscriber::registry().with(filter).with(
+        tracing_subscriber::fmt::layer()
+            .with_writer(log_writer)
+            .with_ansi(false),
+    );
+    if desktop_launch {
+        subscriber.init();
+    } else {
+        subscriber
+            .with(tracing_subscriber::fmt::layer().with_writer(std::io::stdout))
+            .init();
+    }
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -135,6 +141,8 @@ pub async fn run() {
     );
 
     sqlx::any::install_default_drivers();
+    let (shutdown_tx, _) = watch::channel(false);
+    let mut system_tray: Option<DesktopTray> = None;
     loop {
         let config = config::Config::from_env();
         info!(
@@ -182,6 +190,7 @@ pub async fn run() {
         }
 
         let (restart_tx, mut restart_rx) = watch::channel(false);
+        let mut shutdown_rx = shutdown_tx.subscribe();
         let state = AppState {
             database: database.clone(),
             config: Arc::new(config.clone()),
@@ -195,20 +204,45 @@ pub async fn run() {
         let listener = TcpListener::bind(addr)
             .await
             .expect("failed to bind configured address");
-        info!(address = %format!("http://{addr}"), "HTTP server is listening");
+        let listener_addr = listener
+            .local_addr()
+            .expect("failed to read configured listener address");
+        let listener_url = format!("http://{listener_addr}");
+        info!(address = %listener_url, "HTTP server is listening");
+        if desktop_launch {
+            if let Some(system_tray) = &system_tray {
+                system_tray.update_listener_url(&listener_url);
+            } else {
+                match DesktopTray::start(&listener_url, shutdown_tx.clone()) {
+                    Ok(tray) => {
+                        info!(address = %listener_url, "system tray is available");
+                        system_tray = Some(tray);
+                    }
+                    Err(error) => warn!("failed to create system tray: {error}"),
+                }
+            }
+        }
         let server = axum::serve(listener, app).with_graceful_shutdown(async move {
-            while restart_rx.changed().await.is_ok() {
-                if *restart_rx.borrow() {
+            loop {
+                let should_stop = tokio::select! {
+                    result = restart_rx.changed() => result.is_err() || *restart_rx.borrow(),
+                    result = shutdown_rx.changed() => result.is_err() || *shutdown_rx.borrow(),
+                };
+                if should_stop {
                     break;
                 }
             }
         });
         let result = server.await;
         let restart_requested = *restart_tx.borrow();
+        let shutdown_requested = *shutdown_tx.borrow();
         database.pool.close().await;
-        if restart_requested {
+        if restart_requested && !shutdown_requested {
             info!("restarting GugleRAG with the saved configuration");
             continue;
+        }
+        if shutdown_requested {
+            info!("shutting down after system tray exit");
         }
         match result {
             Ok(()) => info!("HTTP server stopped"),
