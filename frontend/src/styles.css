@@ -920,9 +920,25 @@ label {
   cursor: pointer;
 }
 
-.heading-icon-btn:hover {
+.sidebar-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.heading-icon-btn:hover:not(:disabled) {
   background: var(--rail-raised);
   color: var(--rail-ink);
+}
+
+.heading-icon-btn:focus-visible {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: 1px;
+}
+
+.heading-icon-btn:disabled {
+  cursor: wait;
+  opacity: 0.55;
 }
 
 .knowledge-groups,

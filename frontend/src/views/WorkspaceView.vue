@@ -15,6 +15,7 @@ import {
   Menu,
   Plus,
   Plug,
+  RotateCw,
   Search,
   Settings,
   Trash2,
@@ -64,6 +65,9 @@ const knowledgeBases = ref<KnowledgeBase[]>([]);
 const documentsByKnowledgeBase = ref<Record<string, DocumentItem[]>>({});
 const expandedKnowledgeBaseIds = ref<Set<string>>(new Set());
 const expandedFolderIds = ref<Set<string>>(new Set());
+const loadedDirectoryKeys = ref<Set<string>>(new Set());
+const loadingDirectoryKeys = ref<Set<string>>(new Set());
+const knowledgeBasesLoading = ref(false);
 const zipInput = ref<HTMLInputElement | null>(null);
 const zipKnowledgeBaseId = ref("");
 const zipUploadProgress = ref(0);
@@ -115,7 +119,8 @@ const folderForm = reactive<{ name: string; knowledgeBaseId: string; parentId: s
 interface TreeRow {
   document: DocumentItem;
   depth: number;
-  hasChildren: boolean;
+  canExpand: boolean;
+  childrenLoading: boolean;
 }
 
 interface Toast {
@@ -212,7 +217,13 @@ function buildTreeRows(documents: DocumentItem[]): TreeRow[] {
       if (visibleIds.has(document.id)) continue;
       visibleIds.add(document.id);
       const hasChildren = (documentsByParent.get(document.id) ?? []).length > 0;
-      rows.push({ document, depth, hasChildren });
+      const key = directoryKey(document.knowledge_base_id, document.id);
+      rows.push({
+        document,
+        depth,
+        canExpand: hasChildren || !loadedDirectoryKeys.value.has(key),
+        childrenLoading: loadingDirectoryKeys.value.has(key)
+      });
       if (document.is_folder && expandedFolderIds.value.has(document.id)) {
         visit(document.id, depth + 1);
       }
@@ -220,13 +231,21 @@ function buildTreeRows(documents: DocumentItem[]): TreeRow[] {
   };
   visit(null, 0);
   for (const document of sortDocuments(documents.filter((item) => !reachableIds.has(item.id)))) {
+    const key = directoryKey(document.knowledge_base_id, document.id);
     rows.push({
       document,
       depth: 0,
-      hasChildren: (documentsByParent.get(document.id) ?? []).length > 0
+      canExpand:
+        (documentsByParent.get(document.id) ?? []).length > 0 ||
+        !loadedDirectoryKeys.value.has(key),
+      childrenLoading: loadingDirectoryKeys.value.has(key)
     });
   }
   return rows;
+}
+
+function directoryKey(knowledgeBaseId: string, parentId: string | null): string {
+  return `${knowledgeBaseId}:${parentId ?? "root"}`;
 }
 
 function firstFile(documents: DocumentItem[]): DocumentItem | undefined {
@@ -364,32 +383,106 @@ async function loadContext() {
   await loadKnowledgeBases();
 }
 
+let knowledgeBaseLoadSequence = 0;
+
 async function loadKnowledgeBases() {
+  const loadSequence = ++knowledgeBaseLoadSequence;
+  const workspaceId = selectedWorkspaceId.value;
+  const previousActiveDocument = activeDoc.value;
+  const restoreActiveDocument = Boolean(
+    previousActiveDocument &&
+    knowledgeBases.value.some(
+      (knowledgeBase) =>
+        knowledgeBase.id === previousActiveDocument.knowledge_base_id &&
+        knowledgeBase.workspace_id === workspaceId
+    )
+  );
+  let firstDocumentId = "";
+  let firstDocumentKnowledgeBaseId = "";
   activeDoc.value = null;
+  knowledgeBases.value = [];
+  selectedKnowledgeBaseId.value = "";
   documentsByKnowledgeBase.value = {};
   expandedKnowledgeBaseIds.value = new Set();
   expandedFolderIds.value = new Set();
+  loadedDirectoryKeys.value = new Set();
+  loadingDirectoryKeys.value = new Set();
   teamMembers.value = [];
-  if (!selectedWorkspaceId.value) return;
-  localStorage.setItem("guglerag.workspace", selectedWorkspaceId.value);
-  knowledgeBases.value = await request<KnowledgeBase[]>(
-    `/api/workspaces/${selectedWorkspaceId.value}/knowledge-bases`,
-    { headers: authHeaders() }
-  );
-  const saved = localStorage.getItem(`guglerag.knowledge-base.${selectedWorkspaceId.value}`);
-  selectedKnowledgeBaseId.value = knowledgeBases.value.some((item) => item.id === saved)
-    ? saved ?? ""
-    : knowledgeBases.value[0]?.id ?? "";
-  if (selectedKnowledgeBaseId.value) {
-    expandedKnowledgeBaseIds.value = new Set([selectedKnowledgeBaseId.value]);
-  }
-  if (selectedTeam.value) {
-    teamMembers.value = await request<TeamMember[]>(
-      `/api/teams/${selectedTeam.value.id}/members`,
+  query.value = "";
+  knowledgeBasesLoading.value = Boolean(workspaceId);
+  if (!workspaceId) return;
+  localStorage.setItem("guglerag.workspace", workspaceId);
+
+  try {
+    const nextKnowledgeBases = await request<KnowledgeBase[]>(
+      `/api/workspaces/${workspaceId}/knowledge-bases`,
       { headers: authHeaders() }
     );
+    const roots = await fetchKnowledgeBaseRoots(nextKnowledgeBases);
+    if (loadSequence !== knowledgeBaseLoadSequence || workspaceId !== selectedWorkspaceId.value) return;
+
+    knowledgeBases.value = nextKnowledgeBases;
+    documentsByKnowledgeBase.value = roots.documents;
+    loadedDirectoryKeys.value = roots.loadedKeys;
+    const saved = localStorage.getItem(`guglerag.knowledge-base.${workspaceId}`);
+    const restoredKnowledgeBaseId = restoreActiveDocument
+      ? previousActiveDocument?.knowledge_base_id ?? ""
+      : "";
+    selectedKnowledgeBaseId.value = nextKnowledgeBases.some(
+      (item) => item.id === restoredKnowledgeBaseId
+    )
+      ? restoredKnowledgeBaseId
+      : nextKnowledgeBases.some((item) => item.id === saved)
+        ? saved ?? ""
+        : nextKnowledgeBases[0]?.id ?? "";
+    if (selectedKnowledgeBaseId.value === restoredKnowledgeBaseId && previousActiveDocument) {
+      activeDoc.value = previousActiveDocument;
+    }
+    if (selectedKnowledgeBaseId.value) {
+      expandedKnowledgeBaseIds.value = new Set([selectedKnowledgeBaseId.value]);
+    }
+    if (roots.failed) toast("error", "部分知识库的根目录暂时无法读取");
+
+    const teamId = workspaces.value.find((workspace) => workspace.id === workspaceId)?.team_id;
+    if (teamId) void loadTeamMembers(teamId, loadSequence);
+
+    if (!activeDoc.value) {
+      const selectedDocuments = documentsByKnowledgeBase.value[selectedKnowledgeBaseId.value] ?? [];
+      const firstDocument = firstFile(
+        selectedDocuments.filter((document) => document.parent_id === null)
+      );
+      firstDocumentId = firstDocument?.id ?? "";
+      firstDocumentKnowledgeBaseId = selectedKnowledgeBaseId.value;
+    }
+  } catch (err) {
+    if (loadSequence === knowledgeBaseLoadSequence) {
+      toast("error", errorMessage(err, "无法读取知识库"));
+    }
+  } finally {
+    if (loadSequence === knowledgeBaseLoadSequence) {
+      knowledgeBasesLoading.value = false;
+    }
   }
-  await loadAllDocuments();
+  if (
+    firstDocumentId &&
+    loadSequence === knowledgeBaseLoadSequence &&
+    workspaceId === selectedWorkspaceId.value
+  ) {
+    await openDocument(firstDocumentId, firstDocumentKnowledgeBaseId);
+  }
+}
+
+async function loadTeamMembers(teamId: string, loadSequence: number) {
+  try {
+    const members = await request<TeamMember[]>(`/api/teams/${teamId}/members`, {
+      headers: authHeaders()
+    });
+    if (loadSequence === knowledgeBaseLoadSequence) teamMembers.value = members;
+  } catch (err) {
+    if (loadSequence === knowledgeBaseLoadSequence) {
+      toast("error", errorMessage(err, "无法读取团队成员"));
+    }
+  }
 }
 
 async function selectKnowledgeBase(knowledgeBaseId: string, openFirst = false, expand = true) {
@@ -408,58 +501,126 @@ async function selectKnowledgeBase(knowledgeBaseId: string, openFirst = false, e
       knowledgeBaseId
     ]);
   }
-  const documents = documentsByKnowledgeBase.value[knowledgeBaseId] ?? [];
+  const documents = (documentsByKnowledgeBase.value[knowledgeBaseId] ?? []).filter(
+    (document) => document.parent_id === null
+  );
   const firstDocument = firstFile(documents);
   if (openFirst && firstDocument) await openDocument(firstDocument.id, knowledgeBaseId);
 }
 
-async function loadAllDocuments(openSelectedFirst = true) {
+async function fetchKnowledgeBaseRoots(knowledgeBaseList: KnowledgeBase[]) {
   let failed = false;
   const entries = await Promise.all(
-    knowledgeBases.value.map(async (knowledgeBase) => {
+    knowledgeBaseList.map(async (knowledgeBase) => {
       try {
-        const documents = await request<DocumentItem[]>(
-          `/api/documents?knowledge_base_id=${knowledgeBase.id}&tree=true`,
-          { headers: authHeaders() }
-        );
-        return [knowledgeBase.id, documents] as const;
+        const documents = await fetchDirectoryDocuments(knowledgeBase.id, null);
+        return { knowledgeBaseId: knowledgeBase.id, documents, loaded: true };
       } catch {
         failed = true;
-        return [knowledgeBase.id, [] as DocumentItem[]] as const;
+        return { knowledgeBaseId: knowledgeBase.id, documents: [] as DocumentItem[], loaded: false };
       }
     })
   );
-  documentsByKnowledgeBase.value = Object.fromEntries(entries);
-  if (failed) toast("error", "部分知识库暂时无法读取");
-  if (!openSelectedFirst || !selectedKnowledgeBaseId.value) return;
-  const selectedDocuments = documentsByKnowledgeBase.value[selectedKnowledgeBaseId.value] ?? [];
-  const firstDocument = firstFile(selectedDocuments);
-  if (firstDocument) {
-    await openDocument(firstDocument.id, selectedKnowledgeBaseId.value);
+  return {
+    documents: Object.fromEntries(entries.map((entry) => [entry.knowledgeBaseId, entry.documents])),
+    loadedKeys: new Set(
+      entries
+        .filter((entry) => entry.loaded)
+        .map((entry) => directoryKey(entry.knowledgeBaseId, null))
+    ),
+    failed
+  };
+}
+
+async function fetchDirectoryDocuments(knowledgeBaseId: string, parentId: string | null) {
+  const params = new URLSearchParams({ knowledge_base_id: knowledgeBaseId });
+  if (parentId) params.set("parent_id", parentId);
+  return request<DocumentItem[]>(`/api/documents?${params.toString()}`, {
+    headers: authHeaders()
+  });
+}
+
+function replaceDirectoryDocuments(
+  currentDocuments: DocumentItem[],
+  parentId: string | null,
+  nextDocuments: DocumentItem[]
+) {
+  const nextIds = new Set(nextDocuments.map((document) => document.id));
+  const removedIds = new Set(
+    currentDocuments
+      .filter((document) => document.parent_id === parentId && !nextIds.has(document.id))
+      .map((document) => document.id)
+  );
+  let foundDescendant = true;
+  while (foundDescendant) {
+    foundDescendant = false;
+    for (const document of currentDocuments) {
+      if (document.parent_id && removedIds.has(document.parent_id) && !removedIds.has(document.id)) {
+        removedIds.add(document.id);
+        foundDescendant = true;
+      }
+    }
+  }
+  return [
+    ...currentDocuments.filter(
+      (document) => document.parent_id !== parentId && !removedIds.has(document.id)
+    ),
+    ...nextDocuments
+  ];
+}
+
+async function loadDirectory(
+  knowledgeBaseId: string,
+  parentId: string | null,
+  openFirst = false
+) {
+  const key = directoryKey(knowledgeBaseId, parentId);
+  const contextSequence = knowledgeBaseLoadSequence;
+  if (loadingDirectoryKeys.value.has(key)) return null;
+  loadingDirectoryKeys.value = new Set([...loadingDirectoryKeys.value, key]);
+  try {
+    const documents = await fetchDirectoryDocuments(knowledgeBaseId, parentId);
+    if (contextSequence !== knowledgeBaseLoadSequence) return null;
+    const currentDocuments = documentsByKnowledgeBase.value[knowledgeBaseId] ?? [];
+    documentsByKnowledgeBase.value = {
+      ...documentsByKnowledgeBase.value,
+      [knowledgeBaseId]: replaceDirectoryDocuments(currentDocuments, parentId, documents)
+    };
+    loadedDirectoryKeys.value = new Set([...loadedDirectoryKeys.value, key]);
+    const firstDocument = firstFile(documents);
+    if (openFirst && firstDocument) await openDocument(firstDocument.id, knowledgeBaseId);
+    return documents;
+  } catch (err) {
+    if (contextSequence === knowledgeBaseLoadSequence) {
+      toast("error", errorMessage(err, "无法读取文档"));
+    }
+    return null;
+  } finally {
+    if (contextSequence === knowledgeBaseLoadSequence) {
+      loadingDirectoryKeys.value = new Set(
+        [...loadingDirectoryKeys.value].filter((item) => item !== key)
+      );
+    }
   }
 }
 
-async function loadDocuments(knowledgeBaseId = selectedKnowledgeBaseId.value, openFirst = false) {
-  if (!knowledgeBaseId) return;
-  try {
-    const documents = await request<DocumentItem[]>(
-      `/api/documents?knowledge_base_id=${knowledgeBaseId}&tree=true`,
-      { headers: authHeaders() }
-    );
-    documentsByKnowledgeBase.value = {
-      ...documentsByKnowledgeBase.value,
-      [knowledgeBaseId]: documents
-    };
-    const firstDocument = firstFile(documents);
-    if (openFirst && firstDocument) await openDocument(firstDocument.id, knowledgeBaseId);
-  } catch (err) {
-    toast("error", errorMessage(err, "无法读取文档"));
-  }
+async function reloadRootDocuments() {
+  documentsByKnowledgeBase.value = {};
+  expandedFolderIds.value = new Set();
+  loadedDirectoryKeys.value = new Set();
+  loadingDirectoryKeys.value = new Set(
+    knowledgeBases.value.map((knowledgeBase) => directoryKey(knowledgeBase.id, null))
+  );
+  const roots = await fetchKnowledgeBaseRoots(knowledgeBases.value);
+  documentsByKnowledgeBase.value = roots.documents;
+  loadedDirectoryKeys.value = roots.loadedKeys;
+  loadingDirectoryKeys.value = new Set();
+  if (roots.failed) toast("error", "部分知识库的根目录暂时无法读取");
 }
 
 async function searchDocuments() {
   try {
-    if (!query.value.trim()) return loadAllDocuments(false);
+    if (!query.value.trim()) return reloadRootDocuments();
     const entries = await Promise.all(
       knowledgeBases.value.map(async (knowledgeBase) => {
         const results = await request<Array<{
@@ -498,21 +659,23 @@ async function searchDocuments() {
 }
 
 async function openDocument(id: string, knowledgeBaseId?: string, mode: "edit" | "preview" = "preview") {
+  const workspaceId = selectedWorkspaceId.value;
   try {
-    activeDoc.value = await request<DocumentItem>(`/api/documents/${id}`, { headers: authHeaders() });
-    if (activeDoc.value.is_folder) {
-      activeDoc.value = null;
+    const document = await request<DocumentItem>(`/api/documents/${id}`, { headers: authHeaders() });
+    if (workspaceId !== selectedWorkspaceId.value) return;
+    if (document.is_folder) {
       toast("error", "目录不能在编辑器中打开");
       return;
     }
-    const ownerId = knowledgeBaseId ?? activeDoc.value.knowledge_base_id;
+    activeDoc.value = document;
+    const ownerId = knowledgeBaseId ?? document.knowledge_base_id;
     selectedKnowledgeBaseId.value = ownerId;
     if (selectedWorkspaceId.value) {
       localStorage.setItem(`guglerag.knowledge-base.${selectedWorkspaceId.value}`, ownerId);
     }
-    editor.title = activeDoc.value.title;
-    editor.content = activeDoc.value.content ?? "";
-    editor.tags = activeDoc.value.tags.join(", ");
+    editor.title = document.title;
+    editor.content = document.content ?? "";
+    editor.tags = document.tags.join(", ");
     editorMode.value = mode;
     sidebarOpen.value = false;
   } catch (err) {
@@ -534,7 +697,7 @@ async function createDocument(knowledgeBaseId = selectedKnowledgeBaseId.value, p
         tags: []
       })
     });
-    await loadDocuments(knowledgeBaseId);
+    await loadDirectory(knowledgeBaseId, parentId);
     expandedKnowledgeBaseIds.value = new Set([...expandedKnowledgeBaseIds.value, knowledgeBaseId]);
     if (parentId) {
       expandedFolderIds.value = new Set([...expandedFolderIds.value, parentId]);
@@ -570,7 +733,7 @@ async function createFolder() {
         is_folder: true
       })
     });
-    await loadDocuments(knowledgeBaseId);
+    await loadDirectory(knowledgeBaseId, parentId);
     await selectKnowledgeBase(knowledgeBaseId, false);
     expandedKnowledgeBaseIds.value = new Set([...expandedKnowledgeBaseIds.value, knowledgeBaseId]);
     if (parentId) {
@@ -606,13 +769,21 @@ async function importZip(event: Event) {
     const accepted = await uploadZipArchive(knowledgeBaseId, formData);
     zipUploadProgress.value = 100;
     const result = await waitForZipImport(knowledgeBaseId, accepted.job_id);
-    await loadDocuments(knowledgeBaseId);
+    const previousDocuments = documentsByKnowledgeBase.value[knowledgeBaseId] ?? [];
+    const previousDocumentIds = new Set(previousDocuments.map((document) => document.id));
+    documentsByKnowledgeBase.value = {
+      ...documentsByKnowledgeBase.value,
+      [knowledgeBaseId]: []
+    };
+    loadedDirectoryKeys.value = new Set(
+      [...loadedDirectoryKeys.value].filter((key) => !key.startsWith(`${knowledgeBaseId}:`))
+    );
+    expandedFolderIds.value = new Set(
+      [...expandedFolderIds.value].filter((id) => !previousDocumentIds.has(id))
+    );
+    await loadDirectory(knowledgeBaseId, null);
     await selectKnowledgeBase(knowledgeBaseId, false);
     expandedKnowledgeBaseIds.value = new Set([...expandedKnowledgeBaseIds.value, knowledgeBaseId]);
-    const importedFolders = (documentsByKnowledgeBase.value[knowledgeBaseId] ?? [])
-      .filter((document) => document.is_folder)
-      .map((document) => document.id);
-    expandedFolderIds.value = new Set([...expandedFolderIds.value, ...importedFolders]);
     const details = [
       `已导入 ${result.imported_files} 个文本文件`,
       result.created_folders ? `创建 ${result.created_folders} 个目录` : "",
@@ -697,7 +868,7 @@ async function saveDocument() {
         tags: editor.tags.split(",").map((tag) => tag.trim()).filter(Boolean)
       })
     });
-    await loadDocuments(knowledgeBaseId);
+    await loadDirectory(knowledgeBaseId, saved.parent_id);
     await openDocument(saved.id, knowledgeBaseId, editorMode.value);
     toast("success", "文档已保存。");
   } catch (err) {
@@ -709,12 +880,13 @@ async function deleteDocument() {
   if (!activeDoc.value || !window.confirm("删除当前文档？")) return;
   try {
     const knowledgeBaseId = activeDoc.value.knowledge_base_id;
+    const parentId = activeDoc.value.parent_id;
     await request(`/api/documents/${activeDoc.value.id}`, {
       method: "DELETE",
       headers: authHeaders()
     });
     activeDoc.value = null;
-    await loadDocuments(knowledgeBaseId, true);
+    await loadDirectory(knowledgeBaseId, parentId, true);
     toast("success", "文档已删除。");
   } catch (err) {
     toast("error", errorMessage(err, "删除失败"));
@@ -731,7 +903,7 @@ async function deleteFolder(document: DocumentItem) {
     if (activeDoc.value?.knowledge_base_id === document.knowledge_base_id) {
       activeDoc.value = null;
     }
-    await loadDocuments(document.knowledge_base_id);
+    await loadDirectory(document.knowledge_base_id, document.parent_id);
     toast("success", "目录及其内容已删除。");
   } catch (err) {
     toast("error", errorMessage(err, "删除目录失败"));
@@ -780,9 +952,7 @@ async function createKnowledgeBase() {
 }
 
 async function deleteKnowledgeBase(knowledgeBase: KnowledgeBase) {
-  const documentCount = documentsByKnowledgeBase.value[knowledgeBase.id]?.length ?? 0;
-  const detail = documentCount > 0 ? `及其中 ${documentCount} 篇文章或目录` : "";
-  if (!window.confirm(`删除知识库“${knowledgeBase.name}”${detail}？此操作不可撤销。`)) return;
+  if (!window.confirm(`删除知识库“${knowledgeBase.name}”及其中全部文章和目录？此操作不可撤销。`)) return;
   try {
     await request(`/api/knowledge-bases/${knowledgeBase.id}`, {
       method: "DELETE",
@@ -792,6 +962,12 @@ async function deleteKnowledgeBase(knowledgeBase: KnowledgeBase) {
     knowledgeBases.value = remaining;
     const { [knowledgeBase.id]: _removed, ...documents } = documentsByKnowledgeBase.value;
     documentsByKnowledgeBase.value = documents;
+    loadedDirectoryKeys.value = new Set(
+      [...loadedDirectoryKeys.value].filter((key) => !key.startsWith(`${knowledgeBase.id}:`))
+    );
+    loadingDirectoryKeys.value = new Set(
+      [...loadingDirectoryKeys.value].filter((key) => !key.startsWith(`${knowledgeBase.id}:`))
+    );
     expandedKnowledgeBaseIds.value = new Set(
       [...expandedKnowledgeBaseIds.value].filter((id) => id !== knowledgeBase.id)
     );
@@ -931,13 +1107,23 @@ function toggleKnowledgeBase(knowledgeBaseId: string) {
   expandedKnowledgeBaseIds.value = next;
 }
 
-function toggleFolder(document: DocumentItem, knowledgeBaseId: string) {
+async function toggleFolder(document: DocumentItem, knowledgeBaseId: string) {
   if (!document.is_folder) return;
-  const next = new Set(expandedFolderIds.value);
-  if (next.has(document.id)) next.delete(document.id);
-  else next.add(document.id);
-  expandedFolderIds.value = next;
-  selectKnowledgeBase(knowledgeBaseId, false, false);
+  if (expandedFolderIds.value.has(document.id)) {
+    expandedFolderIds.value = new Set(
+      [...expandedFolderIds.value].filter((id) => id !== document.id)
+    );
+    await selectKnowledgeBase(knowledgeBaseId, false, false);
+    return;
+  }
+
+  const key = directoryKey(knowledgeBaseId, document.id);
+  if (!loadedDirectoryKeys.value.has(key)) {
+    const documents = await loadDirectory(knowledgeBaseId, document.id);
+    if (!documents) return;
+  }
+  expandedFolderIds.value = new Set([...expandedFolderIds.value, document.id]);
+  await selectKnowledgeBase(knowledgeBaseId, false, false);
 }
 
 function openDialog(dialog: NonNullable<typeof activeDialog.value>) {
@@ -955,10 +1141,14 @@ function closeDialog() {
 }
 
 function logout() {
+  knowledgeBaseLoadSequence += 1;
   adminSettingsOpen.value = false;
   token.value = "";
   user.value = null;
   documentsByKnowledgeBase.value = {};
+  loadedDirectoryKeys.value = new Set();
+  loadingDirectoryKeys.value = new Set();
+  knowledgeBasesLoading.value = false;
   expandedFolderIds.value = new Set();
   zipKnowledgeBaseId.value = "";
   workspaces.value = [];
@@ -1122,12 +1312,27 @@ onUnmounted(() => {
         <section class="knowledge-tree">
           <div class="sidebar-heading">
             <span>知识库 · {{ knowledgeBases.length }}</span>
-            <button class="heading-icon-btn" title="新建知识库" aria-label="新建知识库" @click="openDialog('create-knowledge-base')">
-              <Plus :size="15" />
-            </button>
+            <div class="sidebar-heading-actions">
+              <button
+                class="heading-icon-btn"
+                title="刷新知识库"
+                aria-label="刷新知识库"
+                :disabled="knowledgeBasesLoading"
+                @click="loadKnowledgeBases"
+              >
+                <RotateCw :class="{ spinning: knowledgeBasesLoading }" :size="14" />
+              </button>
+              <button class="heading-icon-btn" title="新建知识库" aria-label="新建知识库" @click="openDialog('create-knowledge-base')">
+                <Plus :size="15" />
+              </button>
+            </div>
           </div>
 
-          <div v-if="knowledgeBases.length" class="knowledge-groups">
+          <div v-if="knowledgeBasesLoading" class="rail-empty">
+            <RotateCw class="spinning" :size="20" />
+            <p>正在获取知识库</p>
+          </div>
+          <div v-else-if="knowledgeBases.length" class="knowledge-groups">
             <section v-for="knowledgeBase in knowledgeBases" :key="knowledgeBase.id" class="knowledge-group">
               <div class="knowledge-row" :class="{ active: selectedKnowledgeBaseId === knowledgeBase.id }">
                 <button
@@ -1139,7 +1344,7 @@ onUnmounted(() => {
                   <ChevronRight v-else :size="15" />
                   <BookOpen :size="15" />
                   <span>{{ knowledgeBase.name }}</span>
-                  <small>{{ documentsByKnowledgeBase[knowledgeBase.id]?.length ?? 0 }}</small>
+                  <small title="当前已加载项目数">{{ documentsByKnowledgeBase[knowledgeBase.id]?.length ?? 0 }}</small>
                 </button>
                 <div class="knowledge-actions">
                   <button
@@ -1191,13 +1396,18 @@ onUnmounted(() => {
                     :aria-expanded="row.document.is_folder ? expandedFolderIds.has(row.document.id) : undefined"
                     @click="row.document.is_folder ? toggleFolder(row.document, knowledgeBase.id) : openDocument(row.document.id, knowledgeBase.id)"
                   >
+                    <RotateCw
+                      v-if="row.document.is_folder && row.childrenLoading"
+                      class="tree-disclosure spinning"
+                      :size="12"
+                    />
                     <ChevronDown
-                      v-if="row.document.is_folder && row.hasChildren && expandedFolderIds.has(row.document.id)"
+                      v-else-if="row.document.is_folder && row.canExpand && expandedFolderIds.has(row.document.id)"
                       class="tree-disclosure"
                       :size="13"
                     />
                     <ChevronRight
-                      v-else-if="row.document.is_folder && row.hasChildren"
+                      v-else-if="row.document.is_folder && row.canExpand"
                       class="tree-disclosure"
                       :size="13"
                     />
@@ -1232,7 +1442,13 @@ onUnmounted(() => {
                     </button>
                   </div>
                 </div>
-                <p v-if="!(treeRowsByKnowledgeBase[knowledgeBase.id]?.length)" class="article-empty">暂无文章或目录</p>
+                <p
+                  v-if="loadingDirectoryKeys.has(directoryKey(knowledgeBase.id, null))"
+                  class="article-empty"
+                >
+                  正在加载…
+                </p>
+                <p v-else-if="!(treeRowsByKnowledgeBase[knowledgeBase.id]?.length)" class="article-empty">暂无文章或目录</p>
               </div>
             </section>
           </div>
@@ -1243,7 +1459,7 @@ onUnmounted(() => {
           </div>
         </section>
 
-        <p v-if="knowledgeBases.length" class="tree-summary">{{ totalDocumentCount }} 篇文章</p>
+        <p v-if="knowledgeBases.length" class="tree-summary">已加载 {{ totalDocumentCount }} 篇文章</p>
       </div>
 
       <div class="sidebar-user">
