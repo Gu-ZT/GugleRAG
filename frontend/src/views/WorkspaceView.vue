@@ -26,7 +26,9 @@ import {
 } from "@lucide/vue";
 import { request } from "../api/client";
 import { renderMarkdown } from "../markdown";
+import { buildWorkspaceRoute, parseWorkspaceRoute } from "../workspaceRoute";
 import AdminSettingsDialog from "./AdminSettingsDialog.vue";
+import type { WorkspaceHistoryMode, WorkspaceRoute } from "../workspaceRoute";
 import type {
   AuthResponse,
   DocumentItem,
@@ -270,6 +272,30 @@ function authHeaders(): Record<string, string> {
   return token.value ? { Authorization: `Bearer ${token.value}` } : {};
 }
 
+function syncWorkspaceRoute(historyMode: WorkspaceHistoryMode) {
+  if (historyMode === "none") return;
+  const documentId = activeDoc.value?.knowledge_base_id === selectedKnowledgeBaseId.value
+    ? activeDoc.value.id
+    : undefined;
+  const path = buildWorkspaceRoute({
+    workspaceId: selectedWorkspaceId.value || undefined,
+    knowledgeBaseId: selectedKnowledgeBaseId.value || undefined,
+    documentId
+  });
+  if (window.location.pathname === path) return;
+  if (historyMode === "push") window.history.pushState(null, "", path);
+  else window.history.replaceState(null, "", path);
+}
+
+function requestedRouteIsValid(route: WorkspaceRoute): boolean {
+  if (route.workspaceId !== selectedWorkspaceId.value) return false;
+  if (!knowledgeBases.value.length) return !route.knowledgeBaseId;
+  return Boolean(
+    route.knowledgeBaseId &&
+    knowledgeBases.value.some((knowledgeBase) => knowledgeBase.id === route.knowledgeBaseId)
+  );
+}
+
 function formatTime(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
@@ -376,26 +402,35 @@ async function loadContext() {
   workspaces.value = workspaceList;
   teams.value = teamList;
   invitations.value = invitationList;
+  const route = parseWorkspaceRoute(window.location.pathname);
   const saved = localStorage.getItem("guglerag.workspace");
-  selectedWorkspaceId.value = workspaceList.some((item) => item.id === saved)
-    ? saved ?? ""
-    : workspaceList.find((item) => item.kind === "personal")?.id ?? workspaceList[0]?.id ?? "";
+  selectedWorkspaceId.value = workspaceList.some((item) => item.id === route.workspaceId)
+    ? route.workspaceId ?? ""
+    : workspaceList.some((item) => item.id === saved)
+      ? saved ?? ""
+      : workspaceList.find((item) => item.kind === "personal")?.id ?? workspaceList[0]?.id ?? "";
   await loadKnowledgeBases();
 }
 
 let knowledgeBaseLoadSequence = 0;
+let documentOpenSequence = 0;
 
-async function loadKnowledgeBases() {
+async function loadKnowledgeBases(historyMode: WorkspaceHistoryMode = "replace") {
   const loadSequence = ++knowledgeBaseLoadSequence;
+  documentOpenSequence += 1;
+  let resolvedHistoryMode = historyMode;
   const workspaceId = selectedWorkspaceId.value;
+  const route = parseWorkspaceRoute(window.location.pathname);
+  const routedKnowledgeBaseId = route.workspaceId === workspaceId
+    ? route.knowledgeBaseId ?? ""
+    : "";
+  const routedDocumentId = routedKnowledgeBaseId ? route.documentId ?? "" : "";
   const previousActiveDocument = activeDoc.value;
   const restoreActiveDocument = Boolean(
     previousActiveDocument &&
-    knowledgeBases.value.some(
-      (knowledgeBase) =>
-        knowledgeBase.id === previousActiveDocument.knowledge_base_id &&
-        knowledgeBase.workspace_id === workspaceId
-    )
+    routedDocumentId === previousActiveDocument.id &&
+    routedKnowledgeBaseId === previousActiveDocument.knowledge_base_id &&
+    knowledgeBases.value.some((knowledgeBase) => knowledgeBase.workspace_id === workspaceId)
   );
   let firstDocumentId = "";
   let firstDocumentKnowledgeBaseId = "";
@@ -424,29 +459,41 @@ async function loadKnowledgeBases() {
     knowledgeBases.value = nextKnowledgeBases;
     documentsByKnowledgeBase.value = roots.documents;
     loadedDirectoryKeys.value = roots.loadedKeys;
+    if (historyMode === "none" && !requestedRouteIsValid(route)) {
+      resolvedHistoryMode = "replace";
+    }
     const saved = localStorage.getItem(`guglerag.knowledge-base.${workspaceId}`);
+    const requestedKnowledgeBaseId = nextKnowledgeBases.some(
+      (item) => item.id === routedKnowledgeBaseId
+    )
+      ? routedKnowledgeBaseId
+      : "";
     const restoredKnowledgeBaseId = restoreActiveDocument
       ? previousActiveDocument?.knowledge_base_id ?? ""
       : "";
-    selectedKnowledgeBaseId.value = nextKnowledgeBases.some(
-      (item) => item.id === restoredKnowledgeBaseId
-    )
-      ? restoredKnowledgeBaseId
-      : nextKnowledgeBases.some((item) => item.id === saved)
+    selectedKnowledgeBaseId.value = requestedKnowledgeBaseId || restoredKnowledgeBaseId ||
+      (nextKnowledgeBases.some((item) => item.id === saved)
         ? saved ?? ""
-        : nextKnowledgeBases[0]?.id ?? "";
+        : nextKnowledgeBases[0]?.id ?? "");
     if (selectedKnowledgeBaseId.value === restoredKnowledgeBaseId && previousActiveDocument) {
       activeDoc.value = previousActiveDocument;
     }
     if (selectedKnowledgeBaseId.value) {
       expandedKnowledgeBaseIds.value = new Set([selectedKnowledgeBaseId.value]);
+      localStorage.setItem(
+        `guglerag.knowledge-base.${workspaceId}`,
+        selectedKnowledgeBaseId.value
+      );
     }
     if (roots.failed) toast("error", "部分知识库的根目录暂时无法读取");
 
     const teamId = workspaces.value.find((workspace) => workspace.id === workspaceId)?.team_id;
     if (teamId) void loadTeamMembers(teamId, loadSequence);
 
-    if (!activeDoc.value) {
+    if (!activeDoc.value && routedDocumentId && requestedKnowledgeBaseId) {
+      firstDocumentId = routedDocumentId;
+      firstDocumentKnowledgeBaseId = requestedKnowledgeBaseId;
+    } else if (!activeDoc.value && !requestedKnowledgeBaseId) {
       const selectedDocuments = documentsByKnowledgeBase.value[selectedKnowledgeBaseId.value] ?? [];
       const firstDocument = firstFile(
         selectedDocuments.filter((document) => document.parent_id === null)
@@ -468,7 +515,9 @@ async function loadKnowledgeBases() {
     loadSequence === knowledgeBaseLoadSequence &&
     workspaceId === selectedWorkspaceId.value
   ) {
-    await openDocument(firstDocumentId, firstDocumentKnowledgeBaseId);
+    await openDocument(firstDocumentId, firstDocumentKnowledgeBaseId, "preview", resolvedHistoryMode);
+  } else {
+    syncWorkspaceRoute(resolvedHistoryMode);
   }
 }
 
@@ -485,7 +534,23 @@ async function loadTeamMembers(teamId: string, loadSequence: number) {
   }
 }
 
-async function selectKnowledgeBase(knowledgeBaseId: string, openFirst = false, expand = true) {
+async function changeWorkspace() {
+  activeDoc.value = null;
+  selectedKnowledgeBaseId.value = "";
+  syncWorkspaceRoute("push");
+  await loadKnowledgeBases("replace");
+}
+
+async function refreshKnowledgeBases() {
+  await loadKnowledgeBases("replace");
+}
+
+async function selectKnowledgeBase(
+  knowledgeBaseId: string,
+  openFirst = false,
+  expand = true,
+  historyMode: WorkspaceHistoryMode = "push"
+) {
   const changed = selectedKnowledgeBaseId.value !== knowledgeBaseId;
   selectedKnowledgeBaseId.value = knowledgeBaseId;
   if (changed) activeDoc.value = null;
@@ -505,7 +570,11 @@ async function selectKnowledgeBase(knowledgeBaseId: string, openFirst = false, e
     (document) => document.parent_id === null
   );
   const firstDocument = firstFile(documents);
-  if (openFirst && firstDocument) await openDocument(firstDocument.id, knowledgeBaseId);
+  if (openFirst && firstDocument) {
+    await openDocument(firstDocument.id, knowledgeBaseId, "preview", historyMode);
+  } else {
+    syncWorkspaceRoute(historyMode);
+  }
 }
 
 async function fetchKnowledgeBaseRoots(knowledgeBaseList: KnowledgeBase[]) {
@@ -653,22 +722,35 @@ async function searchDocuments() {
       entries.filter(([, documents]) => documents.length > 0).map(([id]) => id)
     );
     expandedFolderIds.value = new Set();
+    syncWorkspaceRoute("push");
   } catch (err) {
     toast("error", errorMessage(err, "搜索失败"));
   }
 }
 
-async function openDocument(id: string, knowledgeBaseId?: string, mode: "edit" | "preview" = "preview") {
+async function openDocument(
+  id: string,
+  knowledgeBaseId?: string,
+  mode: "edit" | "preview" = "preview",
+  historyMode: WorkspaceHistoryMode = "push"
+) {
+  const openSequence = ++documentOpenSequence;
   const workspaceId = selectedWorkspaceId.value;
   try {
     const document = await request<DocumentItem>(`/api/documents/${id}`, { headers: authHeaders() });
-    if (workspaceId !== selectedWorkspaceId.value) return;
+    if (openSequence !== documentOpenSequence || workspaceId !== selectedWorkspaceId.value) return;
     if (document.is_folder) {
       toast("error", "目录不能在编辑器中打开");
+      syncWorkspaceRoute("replace");
+      return;
+    }
+    if (knowledgeBaseId && document.knowledge_base_id !== knowledgeBaseId) {
+      toast("error", "文章不属于当前知识库");
+      syncWorkspaceRoute("replace");
       return;
     }
     activeDoc.value = document;
-    const ownerId = knowledgeBaseId ?? document.knowledge_base_id;
+    const ownerId = document.knowledge_base_id;
     selectedKnowledgeBaseId.value = ownerId;
     if (selectedWorkspaceId.value) {
       localStorage.setItem(`guglerag.knowledge-base.${selectedWorkspaceId.value}`, ownerId);
@@ -678,8 +760,11 @@ async function openDocument(id: string, knowledgeBaseId?: string, mode: "edit" |
     editor.tags = document.tags.join(", ");
     editorMode.value = mode;
     sidebarOpen.value = false;
+    syncWorkspaceRoute(historyMode);
   } catch (err) {
+    if (openSequence !== documentOpenSequence) return;
     toast("error", errorMessage(err, "无法打开文档"));
+    syncWorkspaceRoute("replace");
   }
 }
 
@@ -887,6 +972,7 @@ async function deleteDocument() {
     });
     activeDoc.value = null;
     await loadDirectory(knowledgeBaseId, parentId, true);
+    if (!activeDoc.value) syncWorkspaceRoute("replace");
     toast("success", "文档已删除。");
   } catch (err) {
     toast("error", errorMessage(err, "删除失败"));
@@ -904,6 +990,7 @@ async function deleteFolder(document: DocumentItem) {
       activeDoc.value = null;
     }
     await loadDirectory(document.knowledge_base_id, document.parent_id);
+    if (!activeDoc.value) syncWorkspaceRoute("replace");
     toast("success", "目录及其内容已删除。");
   } catch (err) {
     toast("error", errorMessage(err, "删除目录失败"));
@@ -921,7 +1008,7 @@ async function createTeam() {
     collaborationForm.teamName = "";
     await loadContext();
     selectedWorkspaceId.value = team.workspace_id;
-    await loadKnowledgeBases();
+    await changeWorkspace();
     closeDialog();
     toast("success", "团队已创建。");
   } catch (err) {
@@ -987,6 +1074,7 @@ async function deleteKnowledgeBase(knowledgeBase: KnowledgeBase) {
         await selectKnowledgeBase(selectedKnowledgeBaseId.value, true);
       }
     }
+    syncWorkspaceRoute("replace");
     toast("success", "知识库已删除。");
   } catch (err) {
     toast("error", errorMessage(err, "删除知识库失败"));
@@ -1142,6 +1230,7 @@ function closeDialog() {
 
 function logout() {
   knowledgeBaseLoadSequence += 1;
+  documentOpenSequence += 1;
   adminSettingsOpen.value = false;
   token.value = "";
   user.value = null;
@@ -1179,10 +1268,25 @@ function onBeforeUnload(event: BeforeUnloadEvent) {
   if (dirty.value) event.preventDefault();
 }
 
+async function onPopState() {
+  if (!user.value) return;
+  const route = parseWorkspaceRoute(window.location.pathname);
+  const routedWorkspaceExists = workspaces.value.some(
+    (workspace) => workspace.id === route.workspaceId
+  );
+  selectedWorkspaceId.value = routedWorkspaceExists
+    ? route.workspaceId ?? ""
+    : workspaces.value.find((workspace) => workspace.kind === "personal")?.id ??
+      workspaces.value[0]?.id ??
+      "";
+  await loadKnowledgeBases(routedWorkspaceExists ? "none" : "replace");
+}
+
 onMounted(() => {
   window.addEventListener("keydown", onKeydown);
   window.addEventListener("click", onWindowClick);
   window.addEventListener("beforeunload", onBeforeUnload);
+  window.addEventListener("popstate", onPopState);
   loadRegistrationStatus();
   loadMe();
 });
@@ -1191,6 +1295,7 @@ onUnmounted(() => {
   window.removeEventListener("keydown", onKeydown);
   window.removeEventListener("click", onWindowClick);
   window.removeEventListener("beforeunload", onBeforeUnload);
+  window.removeEventListener("popstate", onPopState);
 });
 </script>
 
@@ -1279,7 +1384,7 @@ onUnmounted(() => {
       </div>
 
       <div class="sidebar-context" @click.stop>
-        <select v-model="selectedWorkspaceId" class="rail-select" aria-label="选择工作区" @change="loadKnowledgeBases">
+        <select v-model="selectedWorkspaceId" class="rail-select" aria-label="选择工作区" @change="changeWorkspace">
           <option v-for="workspace in workspaces" :key="workspace.id" :value="workspace.id">
             {{ workspace.kind === "personal" ? "个人 · " : "团队 · " }}{{ workspace.name }}
           </option>
@@ -1318,7 +1423,7 @@ onUnmounted(() => {
                 title="刷新知识库"
                 aria-label="刷新知识库"
                 :disabled="knowledgeBasesLoading"
-                @click="loadKnowledgeBases"
+                @click="refreshKnowledgeBases"
               >
                 <RotateCw :class="{ spinning: knowledgeBasesLoading }" :size="14" />
               </button>
