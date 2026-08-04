@@ -91,6 +91,37 @@ pub(crate) async fn me(
     Ok(Json(PublicUser::from(&user)))
 }
 
+pub(crate) async fn update_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<auth::UpdateProfileRequest>,
+) -> Result<Json<PublicUser>, AppError> {
+    let user_id = auth::require_user(&headers, &state).await?;
+    let mut user = state
+        .database
+        .get_user(user_id)
+        .await?
+        .ok_or_else(|| AppError::Unauthorized("user no longer exists".to_string()))?;
+
+    auth::validate_display_name(&input.display_name)?;
+    user.display_name = input.display_name.trim().to_string();
+
+    if let Some(new_password) = input.new_password.filter(|password| !password.is_empty()) {
+        let current_password = input.current_password.unwrap_or_default();
+        if user.password_hash != auth::hash_password(&user.salt, &current_password) {
+            return Err(AppError::Unauthorized(
+                "current password is incorrect".to_string(),
+            ));
+        }
+        auth::validate_password(&new_password)?;
+        user.salt = Uuid::new_v4().to_string();
+        user.password_hash = auth::hash_password(&user.salt, &new_password);
+    }
+
+    state.database.update_user(&user).await?;
+    Ok(Json(PublicUser::from(&user)))
+}
+
 pub(crate) async fn registration_status(
     State(state): State<AppState>,
 ) -> Result<Json<Value>, AppError> {

@@ -36,7 +36,7 @@ pub(crate) fn router() -> Router<AppState> {
             get(auth::registration_status),
         )
         .route("/api/auth/login", post(auth::login))
-        .route("/api/me", get(auth::me))
+        .route("/api/me", get(auth::me).put(auth::update_profile))
         .route("/api/workspaces", get(collaboration::list_workspaces))
         .route(
             "/api/workspaces/{workspace_id}/knowledge-bases",

@@ -1,6 +1,6 @@
 use crate::{
     AppState,
-    domain::{Role, User},
+    domain::{PublicUser, Role, User},
     error::AppError,
 };
 use axum::http::HeaderMap;
@@ -30,10 +30,19 @@ pub(crate) struct LoginRequest {
     pub(crate) password: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpdateProfileRequest {
+    pub(crate) display_name: String,
+    #[serde(default)]
+    pub(crate) current_password: Option<String>,
+    #[serde(default)]
+    pub(crate) new_password: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct AuthResponse {
     pub(crate) token: String,
-    pub(crate) user: crate::domain::PublicUser,
+    pub(crate) user: PublicUser,
 }
 
 pub(crate) async fn require_user(headers: &HeaderMap, state: &AppState) -> Result<Uuid, AppError> {
@@ -108,6 +117,16 @@ pub fn validate_password(password: &str) -> Result<(), AppError> {
     if password.len() < 8 {
         return Err(AppError::BadRequest(
             "password must be at least 8 characters".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_display_name(display_name: &str) -> Result<(), AppError> {
+    let length = display_name.trim().chars().count();
+    if !(1..=120).contains(&length) {
+        return Err(AppError::BadRequest(
+            "display name must be 1-120 characters".to_string(),
         ));
     }
     Ok(())

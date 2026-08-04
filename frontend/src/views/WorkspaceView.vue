@@ -27,6 +27,7 @@ import {
 import { request } from "../api/client";
 import { renderMarkdown } from "../markdown";
 import { buildWorkspaceRoute, parseWorkspaceRoute } from "../workspaceRoute";
+import AccountSettingsDialog from "./AccountSettingsDialog.vue";
 import AdminSettingsDialog from "./AdminSettingsDialog.vue";
 import type { WorkspaceHistoryMode, WorkspaceRoute } from "../workspaceRoute";
 import type {
@@ -55,6 +56,7 @@ const registrationEnabled = ref(true);
 const editorMode = ref<"edit" | "preview">("edit");
 const sidebarOpen = ref(false);
 const workspaceMenuOpen = ref(false);
+const accountSettingsOpen = ref(false);
 const adminSettingsOpen = ref(false);
 const activeDialog = ref<
   "create-team" | "invite-member" | "join-team" | "create-knowledge-base" | "create-folder" | "mcp" | "mcp-expiry" | null
@@ -1228,9 +1230,16 @@ function closeDialog() {
   activeDialog.value = null;
 }
 
+function handleProfileSaved(updatedUser: PublicUser) {
+  user.value = updatedUser;
+  accountSettingsOpen.value = false;
+  toast("success", "账户信息已更新。");
+}
+
 function logout() {
   knowledgeBaseLoadSequence += 1;
   documentOpenSequence += 1;
+  accountSettingsOpen.value = false;
   adminSettingsOpen.value = false;
   token.value = "";
   user.value = null;
@@ -1568,11 +1577,21 @@ onUnmounted(() => {
       </div>
 
       <div class="sidebar-user">
-        <span class="avatar">{{ (user.display_name || user.username).slice(0, 1).toUpperCase() }}</span>
-        <div class="user-meta">
-          <strong>{{ user.display_name }}</strong>
-          <small>{{ user.role }}</small>
-        </div>
+        <button
+          class="account-trigger"
+          type="button"
+          title="账户设置"
+          aria-label="打开账户设置"
+          @click="accountSettingsOpen = true"
+        >
+          <span class="avatar" aria-hidden="true">
+            {{ (user.display_name || user.username).slice(0, 1).toUpperCase() }}
+          </span>
+          <span class="user-meta">
+            <strong>{{ user.display_name }}</strong>
+            <small>{{ user.role }}</small>
+          </span>
+        </button>
         <button class="rail-icon-btn" title="MCP 配置" aria-label="MCP 配置" @click="openDialog('mcp')">
           <Plug :size="17" />
         </button>
@@ -1801,5 +1820,12 @@ onUnmounted(() => {
     </div>
   </Teleport>
 
+  <AccountSettingsDialog
+    v-if="accountSettingsOpen && user"
+    :user="user"
+    :token="token"
+    @close="accountSettingsOpen = false"
+    @saved="handleProfileSaved"
+  />
   <AdminSettingsDialog v-if="adminSettingsOpen" :token="token" @close="adminSettingsOpen = false" />
 </template>
