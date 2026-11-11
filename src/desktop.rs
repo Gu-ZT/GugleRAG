@@ -10,6 +10,7 @@ use std::{
 use tao::{
     event::Event,
     event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy},
+    platform::{run_return::EventLoopExtRunReturn, windows::EventLoopBuilderExtWindows},
 };
 use tokio::sync::watch;
 #[cfg(windows)]
@@ -21,6 +22,7 @@ use tray_icon::{
 #[cfg(windows)]
 pub struct DesktopTray {
     event_loop_proxy: EventLoopProxy<TrayCommand>,
+    thread: Option<thread::JoinHandle<()>>,
 }
 
 #[cfg(not(windows))]
@@ -49,7 +51,7 @@ impl DesktopTray {
     pub fn start(listener_url: &str, shutdown_tx: watch::Sender<bool>) -> Result<Self, String> {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let listener_url = listener_url.to_string();
-        thread::Builder::new()
+        let thread = thread::Builder::new()
             .name("guglerag-tray".to_string())
             .spawn(move || run_tray(listener_url, shutdown_tx, ready_tx))
             .map_err(|error| format!("failed to start system tray thread: {error}"))?;
@@ -57,7 +59,10 @@ impl DesktopTray {
         let event_loop_proxy = ready_rx
             .recv()
             .map_err(|error| format!("system tray did not start: {error}"))??;
-        Ok(Self { event_loop_proxy })
+        Ok(Self {
+            event_loop_proxy,
+            thread: Some(thread),
+        })
     }
 
     pub fn update_listener_url(&self, listener_url: &str) {
@@ -71,6 +76,9 @@ impl DesktopTray {
 impl Drop for DesktopTray {
     fn drop(&mut self) {
         let _ = self.event_loop_proxy.send_event(TrayCommand::Exit);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
@@ -89,7 +97,10 @@ fn run_tray(
     shutdown_tx: watch::Sender<bool>,
     ready_tx: SyncSender<Result<EventLoopProxy<TrayCommand>, String>>,
 ) {
-    let event_loop = EventLoopBuilder::<TrayCommand>::with_user_event().build();
+    // The HTTP runtime owns the main thread; this dedicated thread owns all tray objects.
+    let mut event_loop = EventLoopBuilder::<TrayCommand>::with_user_event()
+        .with_any_thread(true)
+        .build();
     let event_loop_proxy = event_loop.create_proxy();
     let menu = Menu::new();
     let quit_item = MenuItem::new("退出 GugleRAG", true, None);
@@ -129,7 +140,8 @@ fn run_tray(
         return;
     }
 
-    event_loop.run(move |event, _, control_flow| {
+    // `run` exits the entire process; the tray must return to allow server cleanup.
+    event_loop.run_return(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
         if let Event::UserEvent(command) = event {
             match command {

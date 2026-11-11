@@ -204,8 +204,8 @@ fn stub_embedding(input: &str) -> Vec<f32> {
     let mut vector = vec![0.0; STUB_DIMENSIONS];
     for token in input.split_whitespace() {
         let digest = Sha256::digest(token.to_lowercase().as_bytes());
-        for chunk in digest.chunks_exact(2).take(8) {
-            let bucket = usize::from(u16::from_be_bytes([chunk[0], chunk[1]])) % STUB_DIMENSIONS;
+        for chunk in digest.as_chunks::<2>().0.iter().take(8) {
+            let bucket = usize::from(u16::from_be_bytes(*chunk)) % STUB_DIMENSIONS;
             let sign = if chunk[0] & 1 == 0 { 1.0 } else { -1.0 };
             vector[bucket] += sign;
         }

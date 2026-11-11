@@ -6,7 +6,8 @@ pub mod error;
 pub mod search;
 
 mod api;
-mod desktop;
+#[doc(hidden)]
+pub mod desktop;
 mod embedding;
 pub mod logging;
 mod mcp;
